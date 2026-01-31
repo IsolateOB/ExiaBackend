@@ -43,6 +43,28 @@ struct UserRow {
     password_hash: String,
 }
 
+#[derive(Deserialize)]
+struct RaidPlanRow {
+    plan_data: String,
+    updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct SaveRaidPlanRequest {
+    plan_data: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct TeamTemplateRow {
+    template_data: String,
+    updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct SaveTeamTemplateRequest {
+    template_data: serde_json::Value,
+}
+
 #[derive(Serialize, Deserialize)]
 struct Claims {
     sub: String,
@@ -501,6 +523,220 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             json_response(
                 &serde_json::json!({"ok": true, "message": "account deleted successfully"}),
+                200,
+            )
+        })
+        .get_async("/raid-plan", |req, ctx| async move {
+            let env = ctx.env;
+            let db = match env.d1("DB") {
+                Ok(d) => d,
+                Err(_) => return error_response("database connection failed", 500),
+            };
+
+            // Verify JWT token
+            let auth = req.headers().get("Authorization")?.unwrap_or_default();
+            if !auth.starts_with("Bearer ") {
+                return error_response("missing token", 401);
+            }
+
+            let token = auth.trim_start_matches("Bearer ").trim();
+            let secret = match get_jwt_secret(&env) {
+                Ok(s) => s,
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
+            };
+            let mut validation = Validation::new(Algorithm::HS256);
+            validation.validate_exp = true;
+
+            let claims = match decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(secret.as_bytes()),
+                &validation,
+            ) {
+                Ok(data) => data.claims,
+                Err(_) => return error_response("invalid or expired token", 401),
+            };
+
+            let stmt = db.prepare("SELECT plan_data, updated_at FROM raid_plans WHERE user_id = ?1");
+            let row = match stmt.bind(&[(claims.uid as i32).into()]) {
+                Ok(s) => match s.first::<RaidPlanRow>(None).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return error_response("no cloud data found", 404),
+                    Err(e) => return error_response(&format!("database query error: {}", e), 500),
+                },
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
+
+            // Parse plan_data string back to JSON
+            let plan_json: serde_json::Value = match serde_json::from_str(&row.plan_data) {
+                Ok(v) => v,
+                Err(_) => return error_response("stored data corruption", 500),
+            };
+
+            json_response(
+                &serde_json::json!({
+                    "plan_data": plan_json,
+                    "updated_at": row.updated_at
+                }),
+                200,
+            )
+        })
+        .post_async("/raid-plan", |mut req, ctx| async move {
+            let env = ctx.env;
+            let db = match env.d1("DB") {
+                Ok(d) => d,
+                Err(_) => return error_response("database connection failed", 500),
+            };
+
+            // Verify JWT token
+            let auth = req.headers().get("Authorization")?.unwrap_or_default();
+            if !auth.starts_with("Bearer ") {
+                return error_response("missing token", 401);
+            }
+
+            let token = auth.trim_start_matches("Bearer ").trim();
+            let secret = match get_jwt_secret(&env) {
+                Ok(s) => s,
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
+            };
+            let mut validation = Validation::new(Algorithm::HS256);
+            validation.validate_exp = true;
+
+            let claims = match decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(secret.as_bytes()),
+                &validation,
+            ) {
+                Ok(data) => data.claims,
+                Err(_) => return error_response("invalid or expired token", 401),
+            };
+
+            let body: SaveRaidPlanRequest = match req.json().await {
+                Ok(b) => b,
+                Err(_) => return error_response("invalid json format", 400),
+            };
+
+            let plan_str = body.plan_data.to_string();
+            let now = Utc::now().timestamp() as f64;
+
+            let stmt = db.prepare("INSERT OR REPLACE INTO raid_plans (user_id, plan_data, updated_at) VALUES (?1, ?2, ?3)");
+            match stmt.bind(&[(claims.uid as i32).into(), plan_str.into(), now.into()]) {
+                Ok(s) => {
+                    if s.run().await.is_err() {
+                        return error_response("failed to save data", 500);
+                    }
+                }
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
+
+            json_response(
+                &serde_json::json!({"ok": true, "message": "data saved to cloud"}),
+                200,
+            )
+        })
+        .get_async("/team-template", |req, ctx| async move {
+            let env = ctx.env;
+            let db = match env.d1("DB") {
+                Ok(d) => d,
+                Err(_) => return error_response("database connection failed", 500),
+            };
+
+            // Verify JWT token
+            let auth = req.headers().get("Authorization")?.unwrap_or_default();
+            if !auth.starts_with("Bearer ") {
+                return error_response("missing token", 401);
+            }
+
+            let token = auth.trim_start_matches("Bearer ").trim();
+            let secret = match get_jwt_secret(&env) {
+                Ok(s) => s,
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
+            };
+            let mut validation = Validation::new(Algorithm::HS256);
+            validation.validate_exp = true;
+
+            let claims = match decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(secret.as_bytes()),
+                &validation,
+            ) {
+                Ok(data) => data.claims,
+                Err(_) => return error_response("invalid or expired token", 401),
+            };
+
+            let stmt = db.prepare("SELECT template_data, updated_at FROM team_templates WHERE user_id = ?1");
+            let row = match stmt.bind(&[(claims.uid as i32).into()]) {
+                Ok(s) => match s.first::<TeamTemplateRow>(None).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return error_response("no cloud data found", 404),
+                    Err(e) => return error_response(&format!("database query error: {}", e), 500),
+                },
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
+
+            // Parse template_data string back to JSON
+            let tmpl_json: serde_json::Value = match serde_json::from_str(&row.template_data) {
+                Ok(v) => v,
+                Err(_) => return error_response("stored data corruption", 500),
+            };
+
+            json_response(
+                &serde_json::json!({
+                    "template_data": tmpl_json,
+                    "updated_at": row.updated_at
+                }),
+                200,
+            )
+        })
+        .post_async("/team-template", |mut req, ctx| async move {
+            let env = ctx.env;
+            let db = match env.d1("DB") {
+                Ok(d) => d,
+                Err(_) => return error_response("database connection failed", 500),
+            };
+
+            // Verify JWT token
+            let auth = req.headers().get("Authorization")?.unwrap_or_default();
+            if !auth.starts_with("Bearer ") {
+                return error_response("missing token", 401);
+            }
+
+            let token = auth.trim_start_matches("Bearer ").trim();
+            let secret = match get_jwt_secret(&env) {
+                Ok(s) => s,
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
+            };
+            let mut validation = Validation::new(Algorithm::HS256);
+            validation.validate_exp = true;
+
+            let claims = match decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(secret.as_bytes()),
+                &validation,
+            ) {
+                Ok(data) => data.claims,
+                Err(_) => return error_response("invalid or expired token", 401),
+            };
+
+            let body: SaveTeamTemplateRequest = match req.json().await {
+                Ok(b) => b,
+                Err(_) => return error_response("invalid json format", 400),
+            };
+
+            let plan_str = body.template_data.to_string();
+            let now = Utc::now().timestamp() as f64;
+
+            let stmt = db.prepare("INSERT OR REPLACE INTO team_templates (user_id, template_data, updated_at) VALUES (?1, ?2, ?3)");
+            match stmt.bind(&[(claims.uid as i32).into(), plan_str.into(), now.into()]) {
+                Ok(s) => {
+                    if s.run().await.is_err() {
+                        return error_response("failed to save data", 500);
+                    }
+                }
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
+
+            json_response(
+                &serde_json::json!({"ok": true, "message": "data saved to cloud"}),
                 200,
             )
         })
