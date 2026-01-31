@@ -404,20 +404,23 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Ok(s) => match s.first::<UserRow>(None).await {
                     Ok(Some(_)) => return error_response("username already exists", 409),
                     Ok(None) => {} // ok to proceed
-                    Err(_) => return error_response("database check error", 500),
+                    Err(e) => {
+                        return error_response(&format!("database check query error: {}", e), 500)
+                    }
                 },
-                Err(_) => return error_response("database error", 500),
+                Err(e) => return error_response(&format!("database check bind error: {}", e), 500),
             };
 
             // Update user
             let update_stmt = db.prepare("UPDATE users SET username = ?1 WHERE id = ?2");
             match update_stmt.bind(&[new_username.into(), claims.uid.into()]) {
-                Ok(s) => {
-                    if s.run().await.is_err() {
-                        return error_response("failed to update username", 500);
+                Ok(s) => match s.run().await {
+                    Ok(_) => {}
+                    Err(e) => {
+                        return error_response(&format!("failed to update username: {}", e), 500)
                     }
-                }
-                Err(_) => return error_response("database error", 500),
+                },
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
             };
 
             // Issue new token
