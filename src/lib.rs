@@ -177,7 +177,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 .map_err(|_| Error::RustError("password hash failed".into()))?
                 .to_string();
 
-            let created_at = Utc::now().timestamp();
+            let created_at = Utc::now().timestamp() as i32;
             let stmt = db.prepare(
                 "INSERT INTO users (username, password_hash, created_at) VALUES (?1, ?2, ?3)",
             );
