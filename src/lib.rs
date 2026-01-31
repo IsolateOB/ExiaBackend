@@ -311,7 +311,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             // Get current user's password hash
             let stmt = db.prepare("SELECT id, username, password_hash FROM users WHERE id = ?1");
-            let user: UserRow = match stmt.bind(&[claims.uid.into()]) {
+            let user: UserRow = match stmt.bind(&[(claims.uid as i32).into()]) {
                 Ok(s) => match s.first::<UserRow>(None).await {
                     Ok(Some(u)) => u,
                     Ok(None) => return error_response("user not found", 404),
@@ -343,7 +343,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             // Update password in database
             let update_stmt = db.prepare("UPDATE users SET password_hash = ?1 WHERE id = ?2");
-            match update_stmt.bind(&[new_hash.into(), claims.uid.into()]) {
+            match update_stmt.bind(&[new_hash.into(), (claims.uid as i32).into()]) {
                 Ok(s) => {
                     if s.run().await.is_err() {
                         return error_response("failed to update password", 500);
@@ -413,7 +413,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             // Update user
             let update_stmt = db.prepare("UPDATE users SET username = ?1 WHERE id = ?2");
-            match update_stmt.bind(&[new_username.into(), claims.uid.into()]) {
+            match update_stmt.bind(&[new_username.into(), (claims.uid as i32).into()]) {
                 Ok(s) => match s.run().await {
                     Ok(_) => {}
                     Err(e) => {
@@ -490,7 +490,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             // Delete user from database
             let stmt = db.prepare("DELETE FROM users WHERE id = ?1");
-            match stmt.bind(&[claims.uid.into()]) {
+            match stmt.bind(&[(claims.uid as i32).into()]) {
                 Ok(s) => {
                     if s.run().await.is_err() {
                         return error_response("failed to delete account", 500);
