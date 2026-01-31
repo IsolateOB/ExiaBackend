@@ -58,7 +58,7 @@ fn cors_headers() -> Headers {
 
 fn json_response<T: Serialize>(value: &T, status: u16) -> Result<Response> {
     let mut res = Response::from_json(value)?;
-    *res.status_mut() = StatusCode::from(status);
+    res = res.with_status(status);
     res.headers_mut().set("Content-Type", "application/json")?;
     let cors = cors_headers();
     for (k, v) in cors.entries() {
@@ -77,13 +77,13 @@ fn get_jwt_secret(env: &Env) -> Result<String> {
 }
 
 #[event(fetch)]
-pub async fn main(req: Request, env: Env, ctx: Context) -> Result<Response> {
+pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let router = Router::new();
 
     router
         .options_async("/*path", |_req, _ctx| async move {
             let mut res = Response::empty()?;
-            *res.status_mut() = StatusCode::NO_CONTENT;
+            res = res.with_status(204);
             let cors = cors_headers();
             for (k, v) in cors.entries() {
                 res.headers_mut().set(&k, &v)?;
