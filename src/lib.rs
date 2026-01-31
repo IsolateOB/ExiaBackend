@@ -285,7 +285,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let token = auth.trim_start_matches("Bearer ").trim();
             let secret = match get_jwt_secret(&env) {
                 Ok(s) => s,
-                Err(_) => return error_response("internal error", 500),
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
             };
             let mut validation = Validation::new(Algorithm::HS256);
             validation.validate_exp = true;
@@ -373,7 +373,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let token = auth.trim_start_matches("Bearer ").trim();
             let secret = match get_jwt_secret(&env) {
                 Ok(s) => s,
-                Err(_) => return error_response("internal error", 500),
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
             };
             let mut validation = Validation::new(Algorithm::HS256);
             validation.validate_exp = true;
@@ -474,7 +474,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             let token = auth.trim_start_matches("Bearer ").trim();
             let secret = match get_jwt_secret(&env) {
                 Ok(s) => s,
-                Err(_) => return error_response("internal error", 500),
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
             };
             let mut validation = Validation::new(Algorithm::HS256);
             validation.validate_exp = true;
