@@ -1,0 +1,15 @@
+name = "exia-backend"
+main = "build/worker/shim.mjs"
+compatibility_date = "2024-12-01"
+workers_dev = true
+
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+[vars]
+JWT_ISSUER = "exia-backend"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "exia_backend"
+database_id = "89bda42d-177b-4184-bdc2-2b4e34892abd"
