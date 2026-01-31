@@ -42,7 +42,7 @@ struct Claims {
 }
 
 fn cors_headers() -> Headers {
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     headers.set("Access-Control-Allow-Origin", "*").ok();
     headers
         .set(
