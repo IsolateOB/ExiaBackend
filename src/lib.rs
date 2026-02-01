@@ -30,17 +30,44 @@ struct ChangeUsernameRequest {
     new_username: String,
 }
 
+#[derive(Deserialize)]
+struct ChangeAvatarRequest {
+    avatar_url: String,
+}
+
 #[derive(Serialize)]
 struct LoginResponse {
     token: String,
     expires_at: i64,
+    username: String,
+    avatar_url: Option<String>,
+    game_accounts: Vec<GameAccountPayload>,
 }
 
 #[derive(Deserialize)]
-struct UserRow {
+struct UserAuthRow {
     id: i64,
     username: String,
     password_hash: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UserProfileRow {
+    username: String,
+    avatar_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UserIdRow {
+    id: i64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct GameAccountPayload {
+    game_uid: String,
+    cookie: Option<String>,
+    updated_at: i64,
 }
 
 #[derive(Deserialize)]
@@ -163,59 +190,9 @@ struct SaveCharactersRequest {
 }
 
 #[derive(Deserialize)]
-struct GameAccountPayload {
-    game_uid: String,
-    username: Option<String>,
-    email: Option<String>,
-    password: Option<String>,
-    cookie: Option<String>,
-    area_id: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct GameAccountLookupRow {
     game_uid: String,
-    username: Option<String>,
-    email: Option<String>,
     cookie: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct GameCharacterPayload {
-    game_uid: Option<String>,
-    name_code: Option<String>,
-    name: Option<String>,
-    element: Option<String>,
-    class: Option<String>,
-    weapon_type: Option<String>,
-    limit_break_grade: Option<i64>,
-    limit_break_core: Option<i64>,
-    skill1_level: Option<i64>,
-    skill2_level: Option<i64>,
-    skill_burst_level: Option<i64>,
-    item_rare: Option<String>,
-    item_level: Option<i64>,
-    atk_elem_lb_score: Option<f64>,
-    stat_atk: Option<f64>,
-    inc_element_dmg: Option<f64>,
-    stat_ammo_load: Option<f64>,
-    stat_charge_time: Option<f64>,
-    stat_charge_damage: Option<f64>,
-    stat_critical: Option<f64>,
-    stat_critical_damage: Option<f64>,
-    stat_accuracy_circle: Option<f64>,
-    stat_def: Option<f64>,
-}
-
-#[derive(Deserialize)]
-struct GameDataRequest {
-    account: GameAccountPayload,
-    characters: Vec<GameCharacterPayload>,
-}
-
-#[derive(Deserialize)]
-struct DeleteGameAccountRequest {
-    game_uid: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -242,8 +219,7 @@ fn cors_headers() -> Headers {
     headers
 }
 
-fn parse_game_openid(cookie: &str) -> Option<String> {
-    let key = "game_openid=";
+fn parse_cookie_digits(cookie: &str, key: &str) -> Option<String> {
     let start = cookie.find(key)? + key.len();
     let mut end = start;
     let bytes = cookie.as_bytes();
@@ -255,6 +231,14 @@ fn parse_game_openid(cookie: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+fn parse_game_openid(cookie: &str) -> Option<String> {
+    parse_cookie_digits(cookie, "game_openid=")
+}
+
+fn parse_game_uid(cookie: &str) -> Option<String> {
+    parse_cookie_digits(cookie, "game_uid=")
 }
 
 fn json_response<T: Serialize>(value: &T, status: u16) -> Result<Response> {
@@ -317,10 +301,10 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             }
 
             let stmt = db.prepare(
-                "SELECT id, username, password_hash FROM users WHERE username = ?1 LIMIT 1",
+                "SELECT id, username, password_hash, avatar_url FROM users WHERE username = ?1 LIMIT 1",
             );
             let row = match stmt.bind(&[body.username.clone().into()]) {
-                Ok(s) => match s.first::<UserRow>(None).await {
+                Ok(s) => match s.first::<UserAuthRow>(None).await {
                     Ok(r) => r,
                     Err(e) => {
                         console_error!("D1 query error: {:?}", e);
@@ -387,10 +371,23 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 }
             };
 
+            let mut game_accounts: Vec<GameAccountPayload> = Vec::new();
+            let stmt = db.prepare("SELECT game_uid, cookie, updated_at FROM game_accounts WHERE user_id = ?1 ORDER BY updated_at DESC");
+            if let Ok(s) = stmt.bind(&[(user.id as i32).into()]) {
+                if let Ok(rows) = s.all().await {
+                    if let Ok(list) = rows.results::<GameAccountPayload>() {
+                        game_accounts = list;
+                    }
+                }
+            }
+
             json_response(
                 &LoginResponse {
                     token,
                     expires_at: exp.timestamp(),
+                    username: user.username.clone(),
+                    avatar_url: user.avatar_url.clone(),
+                    game_accounts,
                 },
                 200,
             )
@@ -434,6 +431,10 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         })
         .get_async("/me", |req, ctx| async move {
             let env = ctx.env;
+            let db = match env.d1("DB") {
+                Ok(d) => d,
+                Err(_) => return error_response("database connection failed", 500),
+            };
             let auth = req.headers().get("Authorization")?.unwrap_or_default();
             if !auth.starts_with("Bearer ") {
                 return error_response("missing token", 401);
@@ -451,10 +452,21 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             )
             .map_err(|_| Error::RustError("invalid token".into()))?;
 
+            let stmt = db.prepare("SELECT username, avatar_url FROM users WHERE id = ?1");
+            let profile = match stmt.bind(&[(data.claims.uid as i32).into()]) {
+                Ok(s) => match s.first::<UserProfileRow>(None).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return error_response("user not found", 404),
+                    Err(e) => return error_response(&format!("database query error: {}", e), 500),
+                },
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
+
             json_response(
                 &serde_json::json!({
                     "user_id": data.claims.uid,
-                    "username": data.claims.sub
+                    "username": profile.username,
+                    "avatar_url": profile.avatar_url
                 }),
                 200,
             )
@@ -500,9 +512,9 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             }
 
             // Get current user's password hash
-            let stmt = db.prepare("SELECT id, username, password_hash FROM users WHERE id = ?1");
-            let user: UserRow = match stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.first::<UserRow>(None).await {
+            let stmt = db.prepare("SELECT id, username, password_hash, avatar_url FROM users WHERE id = ?1");
+            let user: UserAuthRow = match stmt.bind(&[(claims.uid as i32).into()]) {
+                Ok(s) => match s.first::<UserAuthRow>(None).await {
                     Ok(Some(u)) => u,
                     Ok(None) => return error_response("user not found", 404),
                     Err(_) => return error_response("database error", 500),
@@ -591,7 +603,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             // Check if exists
             let stmt = db.prepare("SELECT id FROM users WHERE username = ?1");
             match stmt.bind(&[new_username.into()]) {
-                Ok(s) => match s.first::<UserRow>(None).await {
+                Ok(s) => match s.first::<UserIdRow>(None).await {
                     Ok(Some(_)) => return error_response("username already exists", 409),
                     Ok(None) => {} // ok to proceed
                     Err(e) => {
@@ -644,6 +656,63 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                     "message": "username changed successfully",
                     "token": new_token,
                     "username": new_username
+                }),
+                200,
+            )
+        })
+        .post_async("/change-avatar", |mut req, ctx| async move {
+            let env = ctx.env;
+            let db = match env.d1("DB") {
+                Ok(d) => d,
+                Err(_) => return error_response("database connection failed", 500),
+            };
+
+            let auth = req.headers().get("Authorization")?.unwrap_or_default();
+            if !auth.starts_with("Bearer ") {
+                return error_response("missing token", 401);
+            }
+
+            let token = auth.trim_start_matches("Bearer ").trim();
+            let secret = match get_jwt_secret(&env) {
+                Ok(s) => s,
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
+            };
+            let mut validation = Validation::new(Algorithm::HS256);
+            validation.validate_exp = true;
+
+            let claims = match decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(secret.as_bytes()),
+                &validation,
+            ) {
+                Ok(data) => data.claims,
+                Err(_) => return error_response("invalid or expired token", 401),
+            };
+
+            let body: ChangeAvatarRequest = match req.json().await {
+                Ok(b) => b,
+                Err(_) => return error_response("invalid json format", 400),
+            };
+
+            let avatar_url = body.avatar_url.trim();
+            if avatar_url.is_empty() {
+                return error_response("avatar url cannot be empty", 400);
+            }
+
+            let update_stmt = db.prepare("UPDATE users SET avatar_url = ?1 WHERE id = ?2");
+            match update_stmt.bind(&[avatar_url.into(), (claims.uid as i32).into()]) {
+                Ok(s) => {
+                    if s.run().await.is_err() {
+                        return error_response("failed to update avatar", 500);
+                    }
+                }
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
+
+            json_response(
+                &serde_json::json!({
+                    "ok": true,
+                    "avatar_url": avatar_url
                 }),
                 200,
             )
@@ -914,7 +983,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             let now = Utc::now().timestamp() as f64;
 
-            let lookup_stmt = db.prepare("SELECT game_uid, username, email, cookie FROM game_accounts WHERE user_id = ?1");
+            let lookup_stmt = db.prepare("SELECT game_uid, cookie FROM game_accounts WHERE user_id = ?1");
             let lookup_rows = match lookup_stmt.bind(&[(claims.uid as i32).into()]) {
                 Ok(s) => match s.all().await {
                     Ok(r) => match r.results::<GameAccountLookupRow>() {
@@ -931,16 +1000,6 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             for row in lookup_rows.into_iter() {
                 let uid = row.game_uid.clone();
                 account_key_map.insert(uid.clone(), uid.clone());
-                if let Some(username) = row.username {
-                    if !username.trim().is_empty() {
-                        account_key_map.insert(username, uid.clone());
-                    }
-                }
-                if let Some(email) = row.email {
-                    if !email.trim().is_empty() {
-                        account_key_map.insert(email, uid.clone());
-                    }
-                }
                 if let Some(cookie) = row.cookie {
                     if let Some(openid) = parse_game_openid(&cookie) {
                         account_key_map.insert(openid, uid.clone());
@@ -1360,6 +1419,58 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 200,
             )
         })
+        .get_async("/characters", |req, ctx| async move {
+            let env = ctx.env;
+            let db = match env.d1("DB") {
+                Ok(d) => d,
+                Err(_) => return error_response("database connection failed", 500),
+            };
+
+            let auth = req.headers().get("Authorization")?.unwrap_or_default();
+            if !auth.starts_with("Bearer ") {
+                return error_response("missing token", 401);
+            }
+
+            let token = auth.trim_start_matches("Bearer ").trim();
+            let secret = match get_jwt_secret(&env) {
+                Ok(s) => s,
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
+            };
+            let mut validation = Validation::new(Algorithm::HS256);
+            validation.validate_exp = true;
+
+            let claims = match decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(secret.as_bytes()),
+                &validation,
+            ) {
+                Ok(data) => data.claims,
+                Err(_) => return error_response("invalid or expired token", 401),
+            };
+
+            let stmt = db.prepare("SELECT character_data, updated_at FROM user_characters WHERE user_id = ?1");
+            let row = match stmt.bind(&[(claims.uid as i32).into()]) {
+                Ok(s) => match s.first::<UserCharactersRow>(None).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return error_response("no cloud data found", 404),
+                    Err(e) => return error_response(&format!("database query error: {}", e), 500),
+                },
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
+
+            let char_json: serde_json::Value = match serde_json::from_str(&row.character_data) {
+                Ok(v) => v,
+                Err(_) => return error_response("stored data corruption", 500),
+            };
+
+            json_response(
+                &serde_json::json!({
+                    "character_data": char_json,
+                    "updated_at": row.updated_at
+                }),
+                200,
+            )
+        })
         .post_async("/accounts", |mut req, ctx| async move {
             let env = ctx.env;
             let db = match env.d1("DB") {
@@ -1395,11 +1506,151 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(_) => return error_response("invalid json format", 400),
             };
 
-            let acc_str = body.account_data.to_string();
             let now = Utc::now().timestamp() as f64;
 
+            let account_items = match body.account_data {
+                serde_json::Value::Array(arr) => arr,
+                serde_json::Value::Object(_) => vec![body.account_data],
+                _ => vec![],
+            };
+
+            let mut sanitized_list: Vec<serde_json::Value> = Vec::new();
+
+            for item in account_items.into_iter() {
+                let cookie = item
+                    .get("cookie")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if cookie.is_empty() {
+                    continue;
+                }
+
+                let mut game_uid = item
+                    .get("game_uid")
+                    .or_else(|| item.get("gameUid"))
+                    .or_else(|| item.get("gameUID"))
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_default();
+
+                if game_uid.is_empty() {
+                    if let Some(uid) = parse_game_uid(&cookie) {
+                        game_uid = uid;
+                    }
+                }
+
+                let cookie_updated_at = item
+                    .get("cookieUpdatedAt")
+                    .or_else(|| item.get("cookie_updated_at"))
+                    .and_then(|v| {
+                        if let Some(num) = v.as_i64() {
+                            Some(num)
+                        } else if let Some(num) = v.as_f64() {
+                            Some(num as i64)
+                        } else if let Some(s) = v.as_str() {
+                            s.parse::<i64>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(now as i64);
+
+                let enabled = item
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let id_value = item.get("id").cloned().unwrap_or(serde_json::Value::Null);
+
+                sanitized_list.push(serde_json::json!({
+                    "id": id_value,
+                    "game_uid": game_uid,
+                    "cookie": cookie,
+                    "cookieUpdatedAt": cookie_updated_at,
+                    "enabled": enabled
+                }));
+
+                if game_uid.is_empty() || cookie.is_empty() {
+                    continue;
+                }
+
+                let stmt = db.prepare(
+                    "INSERT OR REPLACE INTO game_accounts (user_id, game_uid, cookie, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                );
+                match stmt.bind(&[
+                    (claims.uid as i32).into(),
+                    game_uid.into(),
+                    cookie.into(),
+                    (cookie_updated_at as f64).into(),
+                ]) {
+                    Ok(s) => {
+                        if s.run().await.is_err() {
+                            return error_response("failed to save game account", 500);
+                        }
+                    }
+                    Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+                };
+            }
+
+            let acc_str = serde_json::Value::Array(sanitized_list).to_string();
             let stmt = db.prepare("INSERT OR REPLACE INTO user_accounts (user_id, account_data, updated_at) VALUES (?1, ?2, ?3)");
             match stmt.bind(&[(claims.uid as i32).into(), acc_str.into(), now.into()]) {
+                Ok(s) => {
+                    if s.run().await.is_err() {
+                        return error_response("failed to save data", 500);
+                    }
+                }
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
+
+            json_response(
+                &serde_json::json!({
+                    "ok": true,
+                    "message": "data saved to cloud",
+                    "updated_at": now
+                }),
+                200,
+            )
+        })
+        .post_async("/characters", |mut req, ctx| async move {
+            let env = ctx.env;
+            let db = match env.d1("DB") {
+                Ok(d) => d,
+                Err(_) => return error_response("database connection failed", 500),
+            };
+
+            let auth = req.headers().get("Authorization")?.unwrap_or_default();
+            if !auth.starts_with("Bearer ") {
+                return error_response("missing token", 401);
+            }
+
+            let token = auth.trim_start_matches("Bearer ").trim();
+            let secret = match get_jwt_secret(&env) {
+                Ok(s) => s,
+                Err(_) => return error_response("internal error: jwt secret missing", 500),
+            };
+            let mut validation = Validation::new(Algorithm::HS256);
+            validation.validate_exp = true;
+
+            let claims = match decode::<Claims>(
+                token,
+                &DecodingKey::from_secret(secret.as_bytes()),
+                &validation,
+            ) {
+                Ok(data) => data.claims,
+                Err(_) => return error_response("invalid or expired token", 401),
+            };
+
+            let body: SaveCharactersRequest = match req.json().await {
+                Ok(b) => b,
+                Err(_) => return error_response("invalid json format", 400),
+            };
+
+            let now = Utc::now().timestamp() as f64;
+            let char_str = body.character_data.to_string();
+
+            let stmt = db.prepare("INSERT OR REPLACE INTO user_characters (user_id, character_data, updated_at) VALUES (?1, ?2, ?3)");
+            match stmt.bind(&[(claims.uid as i32).into(), char_str.into(), now.into()]) {
                 Ok(s) => {
                     if s.run().await.is_err() {
                         return error_response("failed to save data", 500);
@@ -1515,9 +1766,93 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             }
 
             let merged_value = serde_json::Value::Array(existing_list);
-            let acc_str = merged_value.to_string();
             let now = Utc::now().timestamp() as f64;
 
+            let account_items = match &merged_value {
+                serde_json::Value::Array(arr) => arr.clone(),
+                serde_json::Value::Object(_) => vec![merged_value.clone()],
+                _ => vec![],
+            };
+
+            let mut sanitized_list: Vec<serde_json::Value> = Vec::new();
+
+            for item in account_items.into_iter() {
+                let cookie = item
+                    .get("cookie")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim()
+                    .to_string();
+                if cookie.is_empty() {
+                    continue;
+                }
+
+                let mut game_uid = item
+                    .get("game_uid")
+                    .or_else(|| item.get("gameUid"))
+                    .or_else(|| item.get("gameUID"))
+                    .and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .unwrap_or_default();
+
+                if game_uid.is_empty() {
+                    if let Some(uid) = parse_game_uid(&cookie) {
+                        game_uid = uid;
+                    }
+                }
+
+                let cookie_updated_at = item
+                    .get("cookieUpdatedAt")
+                    .or_else(|| item.get("cookie_updated_at"))
+                    .and_then(|v| {
+                        if let Some(num) = v.as_i64() {
+                            Some(num)
+                        } else if let Some(num) = v.as_f64() {
+                            Some(num as i64)
+                        } else if let Some(s) = v.as_str() {
+                            s.parse::<i64>().ok()
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(now as i64);
+
+                let enabled = item
+                    .get("enabled")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true);
+                let id_value = item.get("id").cloned().unwrap_or(serde_json::Value::Null);
+
+                sanitized_list.push(serde_json::json!({
+                    "id": id_value,
+                    "game_uid": game_uid,
+                    "cookie": cookie,
+                    "cookieUpdatedAt": cookie_updated_at,
+                    "enabled": enabled
+                }));
+
+                if game_uid.is_empty() || cookie.is_empty() {
+                    continue;
+                }
+
+                let stmt = db.prepare(
+                    "INSERT OR REPLACE INTO game_accounts (user_id, game_uid, cookie, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                );
+                match stmt.bind(&[
+                    (claims.uid as i32).into(),
+                    game_uid.into(),
+                    cookie.into(),
+                    (cookie_updated_at as f64).into(),
+                ]) {
+                    Ok(s) => {
+                        if s.run().await.is_err() {
+                            return error_response("failed to save game account", 500);
+                        }
+                    }
+                    Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+                };
+            }
+
+            let acc_str = serde_json::Value::Array(sanitized_list).to_string();
             let stmt = db.prepare("INSERT OR REPLACE INTO user_accounts (user_id, account_data, updated_at) VALUES (?1, ?2, ?3)");
             match stmt.bind(&[(claims.uid as i32).into(), acc_str.into(), now.into()]) {
                 Ok(s) => {
@@ -1536,301 +1871,6 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 }),
                 200,
             )
-        })
-        .get_async("/characters", |req, ctx| async move {
-            let env = ctx.env;
-            let db = match env.d1("DB") {
-                Ok(d) => d,
-                Err(_) => return error_response("database connection failed", 500),
-            };
-
-            let auth = req.headers().get("Authorization")?.unwrap_or_default();
-            if !auth.starts_with("Bearer ") {
-                return error_response("missing token", 401);
-            }
-
-            let token = auth.trim_start_matches("Bearer ").trim();
-            let secret = match get_jwt_secret(&env) {
-                Ok(s) => s,
-                Err(_) => return error_response("internal error: jwt secret missing", 500),
-            };
-            let mut validation = Validation::new(Algorithm::HS256);
-            validation.validate_exp = true;
-
-            let claims = match decode::<Claims>(
-                token,
-                &DecodingKey::from_secret(secret.as_bytes()),
-                &validation,
-            ) {
-                Ok(data) => data.claims,
-                Err(_) => return error_response("invalid or expired token", 401),
-            };
-
-            let stmt = db.prepare("SELECT character_data, updated_at FROM user_characters WHERE user_id = ?1");
-            let row = match stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.first::<UserCharactersRow>(None).await {
-                    Ok(Some(r)) => r,
-                    Ok(None) => return error_response("no cloud data found", 404),
-                    Err(e) => return error_response(&format!("database query error: {}", e), 500),
-                },
-                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
-            };
-
-            let char_json: serde_json::Value = match serde_json::from_str(&row.character_data) {
-                Ok(v) => v,
-                Err(_) => return error_response("stored data corruption", 500),
-            };
-
-            json_response(
-                &serde_json::json!({
-                    "character_data": char_json,
-                    "updated_at": row.updated_at
-                }),
-                200,
-            )
-        })
-        .post_async("/characters", |mut req, ctx| async move {
-            let env = ctx.env;
-            let db = match env.d1("DB") {
-                Ok(d) => d,
-                Err(_) => return error_response("database connection failed", 500),
-            };
-
-            let auth = req.headers().get("Authorization")?.unwrap_or_default();
-            if !auth.starts_with("Bearer ") {
-                return error_response("missing token", 401);
-            }
-
-            let token = auth.trim_start_matches("Bearer ").trim();
-            let secret = match get_jwt_secret(&env) {
-                Ok(s) => s,
-                Err(_) => return error_response("internal error: jwt secret missing", 500),
-            };
-            let mut validation = Validation::new(Algorithm::HS256);
-            validation.validate_exp = true;
-
-            let claims = match decode::<Claims>(
-                token,
-                &DecodingKey::from_secret(secret.as_bytes()),
-                &validation,
-            ) {
-                Ok(data) => data.claims,
-                Err(_) => return error_response("invalid or expired token", 401),
-            };
-
-            let body: SaveCharactersRequest = match req.json().await {
-                Ok(b) => b,
-                Err(_) => return error_response("invalid json format", 400),
-            };
-
-            let data_str = body.character_data.to_string();
-            let now = Utc::now().timestamp() as f64;
-
-            let stmt = db.prepare("INSERT OR REPLACE INTO user_characters (user_id, character_data, updated_at) VALUES (?1, ?2, ?3)");
-            match stmt.bind(&[(claims.uid as i32).into(), data_str.into(), now.into()]) {
-                Ok(s) => {
-                    if s.run().await.is_err() {
-                        return error_response("failed to save data", 500);
-                    }
-                }
-                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
-            };
-
-            json_response(
-                &serde_json::json!({
-                    "ok": true,
-                    "message": "data saved to cloud",
-                    "updated_at": now
-                }),
-                200,
-            )
-        })
-        .post_async("/game-data", |mut req, ctx| async move {
-            let env = ctx.env;
-            let db = match env.d1("DB") {
-                Ok(d) => d,
-                Err(_) => return error_response("database connection failed", 500),
-            };
-
-            let auth = req.headers().get("Authorization")?.unwrap_or_default();
-            if !auth.starts_with("Bearer ") {
-                return error_response("missing token", 401);
-            }
-
-            let token = auth.trim_start_matches("Bearer ").trim();
-            let secret = match get_jwt_secret(&env) {
-                Ok(s) => s,
-                Err(_) => return error_response("internal error: jwt secret missing", 500),
-            };
-            let mut validation = Validation::new(Algorithm::HS256);
-            validation.validate_exp = true;
-
-            let claims = match decode::<Claims>(
-                token,
-                &DecodingKey::from_secret(secret.as_bytes()),
-                &validation,
-            ) {
-                Ok(data) => data.claims,
-                Err(_) => return error_response("invalid or expired token", 401),
-            };
-
-            let body: GameDataRequest = match req.json().await {
-                Ok(b) => b,
-                Err(_) => return error_response("invalid json format", 400),
-            };
-
-            let game_uid = body.account.game_uid.trim().to_string();
-            if game_uid.is_empty() {
-                return error_response("missing game_uid", 400);
-            }
-
-            let now = Utc::now().timestamp() as f64;
-            let stmt = db.prepare(
-                "INSERT OR REPLACE INTO game_accounts (user_id, game_uid, username, email, password, cookie, area_id, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            );
-            match stmt.bind(&[
-                (claims.uid as i32).into(),
-                game_uid.clone().into(),
-                body.account.username.unwrap_or_default().into(),
-                body.account.email.unwrap_or_default().into(),
-                body.account.password.unwrap_or_default().into(),
-                body.account.cookie.unwrap_or_default().into(),
-                body.account.area_id.unwrap_or_default().into(),
-                now.into(),
-            ]) {
-                Ok(s) => {
-                    if s.run().await.is_err() {
-                        return error_response("failed to save game account", 500);
-                    }
-                }
-                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
-            };
-
-            let delete_stmt = db.prepare("DELETE FROM game_characters WHERE user_id = ?1 AND game_uid = ?2");
-            match delete_stmt.bind(&[(claims.uid as i32).into(), game_uid.clone().into()]) {
-                Ok(s) => {
-                    if s.run().await.is_err() {
-                        return error_response("failed to clear old character data", 500);
-                    }
-                }
-                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
-            };
-
-            for char_item in body.characters.into_iter() {
-                if let Some(char_uid) = char_item.game_uid.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
-                    if char_uid != game_uid {
-                        return error_response("character game_uid mismatch", 400);
-                    }
-                }
-                let stmt = db.prepare(
-                    "INSERT INTO game_characters (user_id, game_uid, name_code, name, element, class, weapon_type, limit_break_grade, limit_break_core, skill1_level, skill2_level, skill_burst_level, item_rare, item_level, atk_elem_lb_score, stat_atk, inc_element_dmg, stat_ammo_load, stat_charge_time, stat_charge_damage, stat_critical, stat_critical_damage, stat_accuracy_circle, stat_def, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
-                );
-                let bind_result = stmt.bind(&[
-                    (claims.uid as i32).into(),
-                    game_uid.clone().into(),
-                    char_item.name_code.unwrap_or_default().into(),
-                    char_item.name.unwrap_or_default().into(),
-                    char_item.element.unwrap_or_default().into(),
-                    char_item.class.unwrap_or_default().into(),
-                    char_item.weapon_type.unwrap_or_default().into(),
-                    char_item.limit_break_grade.unwrap_or(0).into(),
-                    char_item.limit_break_core.unwrap_or(0).into(),
-                    char_item.skill1_level.unwrap_or(0).into(),
-                    char_item.skill2_level.unwrap_or(0).into(),
-                    char_item.skill_burst_level.unwrap_or(0).into(),
-                    char_item.item_rare.unwrap_or_default().into(),
-                    char_item.item_level.unwrap_or(0).into(),
-                    char_item.atk_elem_lb_score.unwrap_or(0.0).into(),
-                    char_item.stat_atk.unwrap_or(0.0).into(),
-                    char_item.inc_element_dmg.unwrap_or(0.0).into(),
-                    char_item.stat_ammo_load.unwrap_or(0.0).into(),
-                    char_item.stat_charge_time.unwrap_or(0.0).into(),
-                    char_item.stat_charge_damage.unwrap_or(0.0).into(),
-                    char_item.stat_critical.unwrap_or(0.0).into(),
-                    char_item.stat_critical_damage.unwrap_or(0.0).into(),
-                    char_item.stat_accuracy_circle.unwrap_or(0.0).into(),
-                    char_item.stat_def.unwrap_or(0.0).into(),
-                    now.into(),
-                ]);
-
-                match bind_result {
-                    Ok(s) => {
-                        if s.run().await.is_err() {
-                            return error_response("failed to save character data", 500);
-                        }
-                    }
-                    Err(e) => return error_response(&format!("database bind error: {}", e), 500),
-                }
-            }
-
-            json_response(
-                &serde_json::json!({
-                    "ok": true,
-                    "message": "game data saved",
-                    "updated_at": now
-                }),
-                200,
-            )
-        })
-        .post_async("/game-account/delete", |mut req, ctx| async move {
-            let env = ctx.env;
-            let db = match env.d1("DB") {
-                Ok(d) => d,
-                Err(_) => return error_response("database connection failed", 500),
-            };
-
-            let auth = req.headers().get("Authorization")?.unwrap_or_default();
-            if !auth.starts_with("Bearer ") {
-                return error_response("missing token", 401);
-            }
-
-            let token = auth.trim_start_matches("Bearer ").trim();
-            let secret = match get_jwt_secret(&env) {
-                Ok(s) => s,
-                Err(_) => return error_response("internal error: jwt secret missing", 500),
-            };
-            let mut validation = Validation::new(Algorithm::HS256);
-            validation.validate_exp = true;
-
-            let claims = match decode::<Claims>(
-                token,
-                &DecodingKey::from_secret(secret.as_bytes()),
-                &validation,
-            ) {
-                Ok(data) => data.claims,
-                Err(_) => return error_response("invalid or expired token", 401),
-            };
-
-            let body: DeleteGameAccountRequest = match req.json().await {
-                Ok(b) => b,
-                Err(_) => return error_response("invalid json format", 400),
-            };
-            let game_uid = body.game_uid.trim().to_string();
-            if game_uid.is_empty() {
-                return error_response("missing game_uid", 400);
-            }
-
-            let stmt = db.prepare("DELETE FROM game_accounts WHERE user_id = ?1 AND game_uid = ?2");
-            match stmt.bind(&[(claims.uid as i32).into(), game_uid.clone().into()]) {
-                Ok(s) => {
-                    if s.run().await.is_err() {
-                        return error_response("failed to delete game account", 500);
-                    }
-                }
-                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
-            };
-
-            let stmt = db.prepare("DELETE FROM game_characters WHERE user_id = ?1 AND game_uid = ?2");
-            match stmt.bind(&[(claims.uid as i32).into(), game_uid.into()]) {
-                Ok(s) => {
-                    if s.run().await.is_err() {
-                        return error_response("failed to delete character data", 500);
-                    }
-                }
-                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
-            };
-
-            json_response(&serde_json::json!({"ok": true}), 200)
         })
         .run(req, env)
         .await
