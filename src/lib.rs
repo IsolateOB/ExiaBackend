@@ -726,8 +726,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             let stmt = db.prepare("SELECT plan_id, plan_name, updated_at FROM raid_plans WHERE user_id = ?1 ORDER BY updated_at DESC");
             let plans = match stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.all::<RaidPlanMetaRow>(None).await {
-                    Ok(r) => r,
+                Ok(s) => match s.all().await {
+                    Ok(r) => match r.results::<RaidPlanMetaRow>() {
+                        Ok(list) => list,
+                        Err(e) => return error_response(&format!("database parse error: {}", e), 500),
+                    },
                     Err(e) => return error_response(&format!("database query error: {}", e), 500),
                 },
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
@@ -739,8 +742,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             let slot_stmt = db.prepare("SELECT plan_id, account_key, slot_index, step, predicted_damage, predicted_damage_input FROM raid_plan_slots WHERE user_id = ?1");
             let slot_rows = match slot_stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.all::<RaidPlanSlotRow>(None).await {
-                    Ok(r) => r,
+                Ok(s) => match s.all().await {
+                    Ok(r) => match r.results::<RaidPlanSlotRow>() {
+                        Ok(list) => list,
+                        Err(e) => return error_response(&format!("database parse error: {}", e), 500),
+                    },
                     Err(e) => return error_response(&format!("database query error: {}", e), 500),
                 },
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
@@ -748,8 +754,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             let char_stmt = db.prepare("SELECT plan_id, account_key, slot_index, position, character_id FROM raid_plan_slot_characters WHERE user_id = ?1");
             let char_rows = match char_stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.all::<RaidPlanSlotCharRow>(None).await {
-                    Ok(r) => r,
+                Ok(s) => match s.all().await {
+                    Ok(r) => match r.results::<RaidPlanSlotCharRow>() {
+                        Ok(list) => list,
+                        Err(e) => return error_response(&format!("database parse error: {}", e), 500),
+                    },
                     Err(e) => return error_response(&format!("database query error: {}", e), 500),
                 },
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
@@ -907,8 +916,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             let lookup_stmt = db.prepare("SELECT game_uid, username, email, cookie FROM game_accounts WHERE user_id = ?1");
             let lookup_rows = match lookup_stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.all::<GameAccountLookupRow>(None).await {
-                    Ok(r) => r,
+                Ok(s) => match s.all().await {
+                    Ok(r) => match r.results::<GameAccountLookupRow>() {
+                        Ok(list) => list,
+                        Err(e) => return error_response(&format!("database parse error: {}", e), 500),
+                    },
                     Err(e) => return error_response(&format!("database query error: {}", e), 500),
                 },
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
@@ -1109,8 +1121,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             let stmt = db.prepare("SELECT template_id, name, created_at, total_damage_coefficient, updated_at FROM team_templates WHERE user_id = ?1 ORDER BY updated_at DESC");
             let templates = match stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.all::<TeamTemplateMetaRow>(None).await {
-                    Ok(r) => r,
+                Ok(s) => match s.all().await {
+                    Ok(r) => match r.results::<TeamTemplateMetaRow>() {
+                        Ok(list) => list,
+                        Err(e) => return error_response(&format!("database parse error: {}", e), 500),
+                    },
                     Err(e) => return error_response(&format!("database query error: {}", e), 500),
                 },
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
@@ -1122,8 +1137,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 
             let member_stmt = db.prepare("SELECT template_id, position, character_id, damage_coefficient, coefficients_json FROM team_template_members WHERE user_id = ?1");
             let members = match member_stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.all::<TeamTemplateMemberRow>(None).await {
-                    Ok(r) => r,
+                Ok(s) => match s.all().await {
+                    Ok(r) => match r.results::<TeamTemplateMemberRow>() {
+                        Ok(list) => list,
+                        Err(e) => return error_response(&format!("database parse error: {}", e), 500),
+                    },
                     Err(e) => return error_response(&format!("database query error: {}", e), 500),
                 },
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
@@ -1699,6 +1717,11 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             };
 
             for char_item in body.characters.into_iter() {
+                if let Some(char_uid) = char_item.game_uid.as_ref().map(|v| v.trim()).filter(|v| !v.is_empty()) {
+                    if char_uid != game_uid {
+                        return error_response("character game_uid mismatch", 400);
+                    }
+                }
                 let stmt = db.prepare(
                     "INSERT INTO game_characters (user_id, game_uid, name_code, name, element, class, weapon_type, limit_break_grade, limit_break_core, skill1_level, skill2_level, skill_burst_level, item_rare, item_level, atk_elem_lb_score, stat_atk, inc_element_dmg, stat_ammo_load, stat_charge_time, stat_charge_damage, stat_critical, stat_critical_damage, stat_accuracy_circle, stat_def, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25)",
                 );
