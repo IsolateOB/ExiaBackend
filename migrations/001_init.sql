@@ -9,19 +9,80 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
 
--- 2. Raid Plans
+-- 2. Raid Plans (Normalized)
 CREATE TABLE IF NOT EXISTS raid_plans (
-    user_id INTEGER PRIMARY KEY,
-    plan_data TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    plan_id TEXT NOT NULL,
+    plan_name TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, plan_id)
 );
+CREATE INDEX IF NOT EXISTS idx_raid_plans_user ON raid_plans(user_id);
 
--- 3. Team Templates
-CREATE TABLE IF NOT EXISTS team_templates (
-    user_id INTEGER PRIMARY KEY,
-    template_data TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
+CREATE TABLE IF NOT EXISTS raid_plan_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    plan_id TEXT NOT NULL,
+    account_key TEXT NOT NULL,
+    game_uid TEXT,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, plan_id, account_key)
 );
+CREATE INDEX IF NOT EXISTS idx_raid_plan_accounts_user ON raid_plan_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_raid_plan_accounts_game_uid ON raid_plan_accounts(game_uid);
+
+CREATE TABLE IF NOT EXISTS raid_plan_slots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    plan_id TEXT NOT NULL,
+    account_key TEXT NOT NULL,
+    slot_index INTEGER NOT NULL,
+    step INTEGER,
+    predicted_damage REAL,
+    predicted_damage_input TEXT,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, plan_id, account_key, slot_index)
+);
+CREATE INDEX IF NOT EXISTS idx_raid_plan_slots_user ON raid_plan_slots(user_id);
+CREATE INDEX IF NOT EXISTS idx_raid_plan_slots_plan ON raid_plan_slots(plan_id);
+
+CREATE TABLE IF NOT EXISTS raid_plan_slot_characters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    plan_id TEXT NOT NULL,
+    account_key TEXT NOT NULL,
+    slot_index INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    character_id INTEGER NOT NULL,
+    UNIQUE(user_id, plan_id, account_key, slot_index, position)
+);
+CREATE INDEX IF NOT EXISTS idx_raid_plan_slot_chars_user ON raid_plan_slot_characters(user_id);
+CREATE INDEX IF NOT EXISTS idx_raid_plan_slot_chars_char ON raid_plan_slot_characters(character_id);
+
+-- 3. Team Templates (Normalized)
+CREATE TABLE IF NOT EXISTS team_templates (
+    user_id INTEGER NOT NULL,
+    template_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    total_damage_coefficient REAL NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(user_id, template_id)
+);
+CREATE INDEX IF NOT EXISTS idx_team_templates_user ON team_templates(user_id);
+
+CREATE TABLE IF NOT EXISTS team_template_members (
+    user_id INTEGER NOT NULL,
+    template_id TEXT NOT NULL,
+    position INTEGER NOT NULL,
+    character_id TEXT,
+    damage_coefficient REAL NOT NULL,
+    coefficients_json TEXT,
+    PRIMARY KEY(user_id, template_id, position)
+);
+CREATE INDEX IF NOT EXISTS idx_team_template_members_user ON team_template_members(user_id);
+CREATE INDEX IF NOT EXISTS idx_team_template_members_char ON team_template_members(character_id);
 
 -- 4. User Accounts (Game Data)
 CREATE TABLE IF NOT EXISTS user_accounts (
@@ -29,3 +90,61 @@ CREATE TABLE IF NOT EXISTS user_accounts (
     account_data TEXT NOT NULL,
     updated_at INTEGER NOT NULL
 );
+
+-- 5. User Characters (Game Data)
+CREATE TABLE IF NOT EXISTS user_characters (
+    user_id INTEGER PRIMARY KEY,
+    character_data TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+-- 6. Game Accounts (Normalized)
+CREATE TABLE IF NOT EXISTS game_accounts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    game_uid TEXT NOT NULL,
+    username TEXT,
+    email TEXT,
+    password TEXT,
+    cookie TEXT,
+    area_id TEXT,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, game_uid)
+);
+CREATE INDEX IF NOT EXISTS idx_game_accounts_user ON game_accounts(user_id);
+CREATE INDEX IF NOT EXISTS idx_game_accounts_uid ON game_accounts(game_uid);
+
+-- 7. Game Characters (Normalized)
+CREATE TABLE IF NOT EXISTS game_characters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    game_uid TEXT NOT NULL,
+    name_code TEXT,
+    name TEXT,
+    element TEXT,
+    class TEXT,
+    weapon_type TEXT,
+    limit_break_grade INTEGER,
+    limit_break_core INTEGER,
+    skill1_level INTEGER,
+    skill2_level INTEGER,
+    skill_burst_level INTEGER,
+    item_rare TEXT,
+    item_level INTEGER,
+    atk_elem_lb_score REAL,
+    stat_atk REAL,
+    inc_element_dmg REAL,
+    stat_ammo_load REAL,
+    stat_charge_time REAL,
+    stat_charge_damage REAL,
+    stat_critical REAL,
+    stat_critical_damage REAL,
+    stat_accuracy_circle REAL,
+    stat_def REAL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_game_characters_user ON game_characters(user_id);
+CREATE INDEX IF NOT EXISTS idx_game_characters_uid ON game_characters(game_uid);
+CREATE INDEX IF NOT EXISTS idx_game_characters_code ON game_characters(name_code);
+CREATE INDEX IF NOT EXISTS idx_game_characters_atk ON game_characters(stat_atk);
+CREATE INDEX IF NOT EXISTS idx_game_characters_elem ON game_characters(inc_element_dmg);
