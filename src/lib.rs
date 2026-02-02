@@ -60,7 +60,7 @@ struct UserProfileRow {
 
 #[derive(Deserialize)]
 struct UserIdRow {
-    id: i64,
+    _id: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -170,13 +170,6 @@ struct TeamTemplateMemberPayload {
 #[derive(Deserialize)]
 struct UserAccountsRow {
     account_data: String,
-    updated_at: i64,
-}
-
-#[derive(Deserialize)]
-struct UserCharactersRow {
-    character_data: String,
-    updated_at: i64,
 }
 
 #[derive(Deserialize)]
@@ -185,8 +178,31 @@ struct SaveAccountsRequest {
 }
 
 #[derive(Deserialize)]
-struct SaveCharactersRequest {
-    character_data: serde_json::Value,
+struct ListItemPayload {
+    id: serde_json::Value,
+    name: Option<String>,
+    data: serde_json::Value,
+}
+
+#[derive(Deserialize)]
+struct SaveListsRequest {
+    lists: Vec<ListItemPayload>,
+}
+
+#[derive(Deserialize)]
+struct AccountListRow {
+    list_id: String,
+    name: String,
+    data: String,
+    updated_at: i64,
+}
+
+#[derive(Deserialize)]
+struct CharacterListRow {
+    list_id: String,
+    name: String,
+    data: String,
+    updated_at: i64,
 }
 
 #[derive(Deserialize)]
@@ -239,6 +255,21 @@ fn parse_game_openid(cookie: &str) -> Option<String> {
 
 fn parse_game_uid(cookie: &str) -> Option<String> {
     parse_cookie_digits(cookie, "game_uid=")
+}
+
+fn normalize_list_id(value: &serde_json::Value) -> Option<String> {
+    match value {
+        serde_json::Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        serde_json::Value::Number(n) => Some(n.to_string()),
+        _ => None,
+    }
 }
 
 fn json_response<T: Serialize>(value: &T, status: u16) -> Result<Response> {
@@ -1395,26 +1426,44 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(_) => return error_response("invalid or expired token", 401),
             };
 
-            let stmt = db.prepare("SELECT account_data, updated_at FROM user_accounts WHERE user_id = ?1");
-            let row = match stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.first::<UserAccountsRow>(None).await {
-                    Ok(Some(r)) => r,
-                    Ok(None) => return error_response("no cloud data found", 404),
+            let stmt = db.prepare("SELECT list_id, name, data, updated_at FROM account_lists WHERE user_id = ?1 ORDER BY list_id");
+            let rows = match stmt.bind(&[(claims.uid as i32).into()]) {
+                Ok(s) => match s.all().await {
+                    Ok(r) => match r.results::<AccountListRow>() {
+                        Ok(list) => list,
+                        Err(e) => return error_response(&format!("database parse error: {}", e), 500),
+                    },
                     Err(e) => return error_response(&format!("database query error: {}", e), 500),
                 },
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
             };
 
-            // Parse account_data string back to JSON
-            let acc_json: serde_json::Value = match serde_json::from_str(&row.account_data) {
-                Ok(v) => v,
-                Err(_) => return error_response("stored data corruption", 500),
-            };
+            if rows.is_empty() {
+                return error_response("no cloud data found", 404);
+            }
+
+            let mut lists: Vec<serde_json::Value> = Vec::new();
+            let mut max_updated_at: i64 = 0;
+            for row in rows.into_iter() {
+                let data_json: serde_json::Value = match serde_json::from_str(&row.data) {
+                    Ok(v) => v,
+                    Err(_) => return error_response("stored data corruption", 500),
+                };
+                if row.updated_at > max_updated_at {
+                    max_updated_at = row.updated_at;
+                }
+                lists.push(serde_json::json!({
+                    "id": row.list_id,
+                    "name": row.name,
+                    "data": data_json,
+                    "updated_at": row.updated_at
+                }));
+            }
 
             json_response(
                 &serde_json::json!({
-                    "account_data": acc_json,
-                    "updated_at": row.updated_at
+                    "lists": lists,
+                    "updated_at": max_updated_at
                 }),
                 200,
             )
@@ -1448,25 +1497,44 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(_) => return error_response("invalid or expired token", 401),
             };
 
-            let stmt = db.prepare("SELECT character_data, updated_at FROM user_characters WHERE user_id = ?1");
-            let row = match stmt.bind(&[(claims.uid as i32).into()]) {
-                Ok(s) => match s.first::<UserCharactersRow>(None).await {
-                    Ok(Some(r)) => r,
-                    Ok(None) => return error_response("no cloud data found", 404),
+            let stmt = db.prepare("SELECT list_id, name, data, updated_at FROM character_lists WHERE user_id = ?1 ORDER BY list_id");
+            let rows = match stmt.bind(&[(claims.uid as i32).into()]) {
+                Ok(s) => match s.all().await {
+                    Ok(r) => match r.results::<CharacterListRow>() {
+                        Ok(list) => list,
+                        Err(e) => return error_response(&format!("database parse error: {}", e), 500),
+                    },
                     Err(e) => return error_response(&format!("database query error: {}", e), 500),
                 },
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
             };
 
-            let char_json: serde_json::Value = match serde_json::from_str(&row.character_data) {
-                Ok(v) => v,
-                Err(_) => return error_response("stored data corruption", 500),
-            };
+            if rows.is_empty() {
+                return error_response("no cloud data found", 404);
+            }
+
+            let mut lists: Vec<serde_json::Value> = Vec::new();
+            let mut max_updated_at: i64 = 0;
+            for row in rows.into_iter() {
+                let data_json: serde_json::Value = match serde_json::from_str(&row.data) {
+                    Ok(v) => v,
+                    Err(_) => return error_response("stored data corruption", 500),
+                };
+                if row.updated_at > max_updated_at {
+                    max_updated_at = row.updated_at;
+                }
+                lists.push(serde_json::json!({
+                    "id": row.list_id,
+                    "name": row.name,
+                    "data": data_json,
+                    "updated_at": row.updated_at
+                }));
+            }
 
             json_response(
                 &serde_json::json!({
-                    "character_data": char_json,
-                    "updated_at": row.updated_at
+                    "lists": lists,
+                    "updated_at": max_updated_at
                 }),
                 200,
             )
@@ -1501,107 +1569,47 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(_) => return error_response("invalid or expired token", 401),
             };
 
-            let body: SaveAccountsRequest = match req.json().await {
+            let body: SaveListsRequest = match req.json().await {
                 Ok(b) => b,
                 Err(_) => return error_response("invalid json format", 400),
             };
 
-            let now = Utc::now().timestamp() as f64;
+            let now = Utc::now().timestamp() as i64;
 
-            let account_items = match body.account_data {
-                serde_json::Value::Array(arr) => arr,
-                serde_json::Value::Object(_) => vec![body.account_data],
-                _ => vec![],
-            };
-
-            let mut sanitized_list: Vec<serde_json::Value> = Vec::new();
-
-            for item in account_items.into_iter() {
-                let cookie = item
-                    .get("cookie")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .trim()
-                    .to_string();
-                if cookie.is_empty() {
-                    continue;
-                }
-
-                let mut game_uid = item
-                    .get("game_uid")
-                    .or_else(|| item.get("gameUid"))
-                    .or_else(|| item.get("gameUID"))
-                    .and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .unwrap_or_default();
-
-                if game_uid.is_empty() {
-                    if let Some(uid) = parse_game_uid(&cookie) {
-                        game_uid = uid;
+            let delete_stmt = db.prepare("DELETE FROM account_lists WHERE user_id = ?1");
+            match delete_stmt.bind(&[(claims.uid as i32).into()]) {
+                Ok(s) => {
+                    if s.run().await.is_err() {
+                        return error_response("failed to clear lists", 500);
                     }
                 }
+                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+            };
 
-                let cookie_updated_at = item
-                    .get("cookieUpdatedAt")
-                    .or_else(|| item.get("cookie_updated_at"))
-                    .and_then(|v| {
-                        if let Some(num) = v.as_i64() {
-                            Some(num)
-                        } else if let Some(num) = v.as_f64() {
-                            Some(num as i64)
-                        } else if let Some(s) = v.as_str() {
-                            s.parse::<i64>().ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(now as i64);
+            for item in body.lists.into_iter() {
+                let list_id = match normalize_list_id(&item.id) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let name = item.name.unwrap_or_default();
+                let data_str = item.data.to_string();
 
-                let enabled = item
-                    .get("enabled")
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(true);
-                let id_value = item.get("id").cloned().unwrap_or(serde_json::Value::Null);
-
-                sanitized_list.push(serde_json::json!({
-                    "id": id_value,
-                    "game_uid": game_uid,
-                    "cookie": cookie,
-                    "cookieUpdatedAt": cookie_updated_at,
-                    "enabled": enabled
-                }));
-
-                if game_uid.is_empty() || cookie.is_empty() {
-                    continue;
-                }
-
-                let stmt = db.prepare(
-                    "INSERT OR REPLACE INTO game_accounts (user_id, game_uid, cookie, updated_at) VALUES (?1, ?2, ?3, ?4)",
-                );
+                let stmt = db.prepare("INSERT OR REPLACE INTO account_lists (user_id, list_id, name, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)");
                 match stmt.bind(&[
                     (claims.uid as i32).into(),
-                    game_uid.into(),
-                    cookie.into(),
-                    (cookie_updated_at as f64).into(),
+                    list_id.into(),
+                    name.into(),
+                    data_str.into(),
+                    (now as f64).into(),
                 ]) {
                     Ok(s) => {
                         if s.run().await.is_err() {
-                            return error_response("failed to save game account", 500);
+                            return error_response("failed to save list", 500);
                         }
                     }
                     Err(e) => return error_response(&format!("database bind error: {}", e), 500),
                 };
             }
-
-            let acc_str = serde_json::Value::Array(sanitized_list).to_string();
-            let stmt = db.prepare("INSERT OR REPLACE INTO user_accounts (user_id, account_data, updated_at) VALUES (?1, ?2, ?3)");
-            match stmt.bind(&[(claims.uid as i32).into(), acc_str.into(), now.into()]) {
-                Ok(s) => {
-                    if s.run().await.is_err() {
-                        return error_response("failed to save data", 500);
-                    }
-                }
-                Err(e) => return error_response(&format!("database bind error: {}", e), 500),
-            };
 
             json_response(
                 &serde_json::json!({
@@ -1641,23 +1649,47 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 Err(_) => return error_response("invalid or expired token", 401),
             };
 
-            let body: SaveCharactersRequest = match req.json().await {
+            let body: SaveListsRequest = match req.json().await {
                 Ok(b) => b,
                 Err(_) => return error_response("invalid json format", 400),
             };
 
-            let now = Utc::now().timestamp() as f64;
-            let char_str = body.character_data.to_string();
+            let now = Utc::now().timestamp() as i64;
 
-            let stmt = db.prepare("INSERT OR REPLACE INTO user_characters (user_id, character_data, updated_at) VALUES (?1, ?2, ?3)");
-            match stmt.bind(&[(claims.uid as i32).into(), char_str.into(), now.into()]) {
+            let delete_stmt = db.prepare("DELETE FROM character_lists WHERE user_id = ?1");
+            match delete_stmt.bind(&[(claims.uid as i32).into()]) {
                 Ok(s) => {
                     if s.run().await.is_err() {
-                        return error_response("failed to save data", 500);
+                        return error_response("failed to clear lists", 500);
                     }
                 }
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
             };
+
+            for item in body.lists.into_iter() {
+                let list_id = match normalize_list_id(&item.id) {
+                    Some(v) => v,
+                    None => continue,
+                };
+                let name = item.name.unwrap_or_default();
+                let data_str = item.data.to_string();
+
+                let stmt = db.prepare("INSERT OR REPLACE INTO character_lists (user_id, list_id, name, data, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)");
+                match stmt.bind(&[
+                    (claims.uid as i32).into(),
+                    list_id.into(),
+                    name.into(),
+                    data_str.into(),
+                    (now as f64).into(),
+                ]) {
+                    Ok(s) => {
+                        if s.run().await.is_err() {
+                            return error_response("failed to save list", 500);
+                        }
+                    }
+                    Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+                };
+            }
 
             json_response(
                 &serde_json::json!({

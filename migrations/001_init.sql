@@ -99,6 +99,32 @@ CREATE TABLE IF NOT EXISTS user_characters (
     updated_at INTEGER NOT NULL
 );
 
+-- 4.2 Account Lists (Templates)
+CREATE TABLE IF NOT EXISTS account_lists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    list_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, list_id)
+);
+CREATE INDEX IF NOT EXISTS idx_account_lists_user ON account_lists(user_id);
+CREATE INDEX IF NOT EXISTS idx_account_lists_list_id ON account_lists(list_id);
+
+-- 4.3 Character Lists (Templates)
+CREATE TABLE IF NOT EXISTS character_lists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    list_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    data TEXT NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(user_id, list_id)
+);
+CREATE INDEX IF NOT EXISTS idx_character_lists_user ON character_lists(user_id);
+CREATE INDEX IF NOT EXISTS idx_character_lists_list_id ON character_lists(list_id);
+
 -- 5. Game Accounts (Normalized)
 CREATE TABLE IF NOT EXISTS game_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
