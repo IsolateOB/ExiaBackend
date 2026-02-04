@@ -33,7 +33,7 @@ pub async fn get_accounts_handler(req: Request, ctx: RouteContext<()>) -> Result
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
-    let stmt = db.prepare("SELECT game_uid, cookie, updated_at, email, password, username FROM game_accounts WHERE user_id = ?1 ORDER BY updated_at DESC");
+    let stmt = db.prepare("SELECT game_uid, game_openid, cookie, updated_at, email, password, username FROM game_accounts WHERE user_id = ?1 ORDER BY updated_at DESC");
     let rows = match stmt.bind(&[(claims.uid as i32).into()]) {
         Ok(s) => match s.all().await {
             Ok(r) => match r.results::<GameAccountPayload>() {
@@ -66,6 +66,7 @@ pub async fn get_accounts_handler(req: Request, ctx: RouteContext<()>) -> Result
         if claims.restricted {
             accounts.push(serde_json::json!({
                 "game_uid": acc.game_uid,
+                "game_openid": acc.game_openid,
                 "cookie": acc.cookie,
                 "cookieUpdatedAt": acc.updated_at,
                 "username": acc.username,
@@ -75,6 +76,7 @@ pub async fn get_accounts_handler(req: Request, ctx: RouteContext<()>) -> Result
         } else {
             accounts.push(serde_json::json!({
                 "game_uid": acc.game_uid,
+                "game_openid": acc.game_openid,
                 "cookie": acc.cookie,
                 "cookieUpdatedAt": acc.updated_at,
                 "email": acc.email,
@@ -302,12 +304,33 @@ pub async fn save_accounts_handler(mut req: Request, ctx: RouteContext<()>) -> R
                 .and_then(|v| v.as_str())
                 .map(|s| s.trim().to_string());
 
+            let mut game_openid = item
+                .get("game_openid")
+                .or_else(|| item.get("gameOpenId"))
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .unwrap_or_default();
+
+            if game_openid.is_empty() {
+                if let Some(openid) = parse_game_openid(&cookie) {
+                    game_openid = openid;
+                }
+            }
+
+            // Treat empty game_openid as None in DB if it's still empty, or valid string.
+            // Actually our D1 bind handles None as NULL if we pass Option.
+            let game_openid_opt = if game_openid.is_empty() {
+                None
+            } else {
+                Some(game_openid)
+            };
+
             let stmt = db.prepare(
-                "INSERT INTO game_accounts (user_id, game_uid, cookie, updated_at, email, password, username) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                "INSERT INTO game_accounts (user_id, game_uid, game_openid, cookie, updated_at, email, password, username) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             );
             match stmt.bind(&[
                 (claims.uid as i32).into(),
                 game_uid.into(),
+                game_openid_opt.into(),
                 cookie.into(),
                 (cookie_updated_at as f64).into(),
                 email.into(),

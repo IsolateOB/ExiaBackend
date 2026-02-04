@@ -85,7 +85,7 @@ CREATE TABLE IF NOT EXISTS team_template_members (
 CREATE INDEX IF NOT EXISTS idx_team_template_members_user ON team_template_members(user_id);
 CREATE INDEX IF NOT EXISTS idx_team_template_members_char ON team_template_members(character_id);
 
--- 4. Character Lists (Templates)
+-- 4. Character Lists
 CREATE TABLE IF NOT EXISTS character_lists (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
@@ -98,11 +98,12 @@ CREATE TABLE IF NOT EXISTS character_lists (
 CREATE INDEX IF NOT EXISTS idx_character_lists_user ON character_lists(user_id);
 CREATE INDEX IF NOT EXISTS idx_character_lists_list_id ON character_lists(list_id);
 
--- 5. Game Accounts (Structured)
+-- 5. Game Accounts
 CREATE TABLE IF NOT EXISTS game_accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL,
     game_uid TEXT NOT NULL,
+    game_openid TEXT,
     cookie TEXT,
     email TEXT,
     password TEXT,

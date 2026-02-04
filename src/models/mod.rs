@@ -33,6 +33,7 @@ pub struct UserIdRow {
 #[derive(Serialize, Deserialize)]
 pub struct GameAccountPayload {
     pub game_uid: String,
+    pub game_openid: Option<String>,
     pub cookie: Option<String>,
     pub updated_at: i64,
     pub email: Option<String>,
