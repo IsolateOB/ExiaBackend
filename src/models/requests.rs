@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -36,11 +36,6 @@ pub struct SaveRaidPlanRequest {
 #[derive(Deserialize)]
 pub struct SaveTeamTemplateRequest {
     pub template_data: serde_json::Value,
-}
-
-#[derive(Deserialize)]
-pub struct SaveAccountsRequest {
-    pub account_data: serde_json::Value,
 }
 
 #[derive(Deserialize)]

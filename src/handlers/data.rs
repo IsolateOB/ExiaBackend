@@ -218,7 +218,6 @@ pub async fn save_accounts_handler(mut req: Request, ctx: RouteContext<()>) -> R
     };
 
     let now = Utc::now().timestamp() as i64;
-    let now_f64 = now as f64;
 
     // Clear existing accounts for this user to perform a full sync/replace
     // (Or we can use REPLACE INTO, but we might want to delete stale ones.

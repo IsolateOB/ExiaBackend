@@ -128,23 +128,10 @@ pub struct TeamTemplateMemberPayload {
 }
 
 #[derive(Deserialize)]
-pub struct UserAccountsRow {
-    pub account_data: String,
-}
-
-#[derive(Deserialize)]
 pub struct ListItemPayload {
     pub id: serde_json::Value,
     pub name: Option<String>,
     pub data: serde_json::Value,
-}
-
-#[derive(Deserialize)]
-pub struct AccountListRow {
-    pub list_id: String,
-    pub name: String,
-    pub data: String,
-    pub updated_at: i64,
 }
 
 #[derive(Deserialize)]
