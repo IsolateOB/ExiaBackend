@@ -52,19 +52,25 @@ pub async fn login_handler(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         None => return error_response("user not found", 401),
     };
 
-    let parsed_hash = match PasswordHash::new(&user.password_hash) {
-        Ok(h) => h,
-        Err(e) => {
-            console_error!("Password hash parse error: {:?}", e);
-            return error_response("internal error: invalid password hash", 500);
-        }
-    };
+    let mut restricted = false;
 
-    if Argon2::default()
-        .verify_password(body.password.as_bytes(), &parsed_hash)
-        .is_err()
-    {
-        return error_response("incorrect password", 401);
+    if !body.password.trim().is_empty() {
+        let parsed_hash = match PasswordHash::new(&user.password_hash) {
+            Ok(h) => h,
+            Err(e) => {
+                console_error!("Password hash parse error: {:?}", e);
+                return error_response("internal error: invalid password hash", 500);
+            }
+        };
+
+        if Argon2::default()
+            .verify_password(body.password.as_bytes(), &parsed_hash)
+            .is_err()
+        {
+            return error_response("incorrect password", 401);
+        }
+    } else {
+        restricted = true;
     }
 
     let now = Utc::now();
@@ -87,6 +93,7 @@ pub async fn login_handler(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         iat: now.timestamp(),
         exp: exp.timestamp(),
         iss: issuer,
+        restricted,
     };
 
     let token = match encode(
@@ -101,23 +108,13 @@ pub async fn login_handler(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         }
     };
 
-    let mut game_accounts: Vec<GameAccountPayload> = Vec::new();
-    let stmt = db.prepare("SELECT game_uid, cookie, updated_at, email, password FROM game_accounts WHERE user_id = ?1 ORDER BY updated_at DESC");
-    if let Ok(s) = stmt.bind(&[(user.id as i32).into()]) {
-        if let Ok(rows) = s.all().await {
-            if let Ok(list) = rows.results::<GameAccountPayload>() {
-                game_accounts = list;
-            }
-        }
-    }
-
     json_response(
         &LoginResponse {
             token,
             expires_at: exp.timestamp(),
             username: user.username.clone(),
             avatar_url: user.avatar_url.clone(),
-            game_accounts,
+            restricted_mode: restricted,
         },
         200,
     )

@@ -8,7 +8,7 @@ pub struct LoginResponse {
     pub expires_at: i64,
     pub username: String,
     pub avatar_url: Option<String>,
-    pub game_accounts: Vec<GameAccountPayload>,
+    pub restricted_mode: bool,
 }
 
 #[derive(Deserialize)]
@@ -37,6 +37,7 @@ pub struct GameAccountPayload {
     pub updated_at: i64,
     pub email: Option<String>,
     pub password: Option<String>,
+    pub username: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -167,4 +168,6 @@ pub struct Claims {
     pub iat: i64,
     pub exp: i64,
     pub iss: String,
+    #[serde(default)]
+    pub restricted: bool,
 }

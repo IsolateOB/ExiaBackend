@@ -148,6 +148,10 @@ pub async fn save_team_template_handler(
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
+    if claims.restricted {
+        return error_response("restricted mode", 403);
+    }
+
     let body: SaveTeamTemplateRequest = match req.json().await {
         Ok(b) => b,
         Err(_) => return error_response("invalid json format", 400),

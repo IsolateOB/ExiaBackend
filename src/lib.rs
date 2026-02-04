@@ -40,7 +40,6 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/accounts", data::save_accounts_handler)
         .get_async("/characters", data::get_characters_handler)
         .post_async("/characters", data::save_characters_handler)
-        .post_async("/accounts/merge", data::merge_accounts_handler)
         .run(req, env)
         .await
 }

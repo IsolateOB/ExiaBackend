@@ -210,6 +210,10 @@ pub async fn save_raid_plan_handler(mut req: Request, ctx: RouteContext<()>) -> 
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
+    if claims.restricted {
+        return error_response("restricted mode", 403);
+    }
+
     let body: SaveRaidPlanRequest = match req.json().await {
         Ok(b) => b,
         Err(_) => return error_response("invalid json format", 400),

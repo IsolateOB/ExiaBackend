@@ -81,6 +81,10 @@ pub async fn change_password_handler(mut req: Request, ctx: RouteContext<()>) ->
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
+    if claims.restricted {
+        return error_response("restricted mode", 403);
+    }
+
     // Parse request body
     let body: ChangePasswordRequest = match req.json().await {
         Ok(b) => b,
@@ -170,6 +174,10 @@ pub async fn change_username_handler(mut req: Request, ctx: RouteContext<()>) ->
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
+    if claims.restricted {
+        return error_response("restricted mode", 403);
+    }
+
     // Parse body
     let body: ChangeUsernameRequest = match req.json().await {
         Ok(b) => b,
@@ -216,6 +224,7 @@ pub async fn change_username_handler(mut req: Request, ctx: RouteContext<()>) ->
         iat: now.timestamp(),
         exp: exp.timestamp(),
         iss: issuer,
+        restricted: claims.restricted,
     };
 
     let new_token = match encode(
@@ -266,6 +275,10 @@ pub async fn change_avatar_handler(mut req: Request, ctx: RouteContext<()>) -> R
         Ok(data) => data.claims,
         Err(_) => return error_response("invalid or expired token", 401),
     };
+
+    if claims.restricted {
+        return error_response("restricted mode", 403);
+    }
 
     let body: ChangeAvatarRequest = match req.json().await {
         Ok(b) => b,
@@ -325,6 +338,10 @@ pub async fn delete_account_handler(req: Request, ctx: RouteContext<()>) -> Resu
         Ok(data) => data.claims,
         Err(_) => return error_response("invalid or expired token", 401),
     };
+
+    if claims.restricted {
+        return error_response("restricted mode", 403);
+    }
 
     // Delete user from database
     let stmt = db.prepare("DELETE FROM users WHERE id = ?1");

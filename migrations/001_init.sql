@@ -133,6 +133,7 @@ CREATE TABLE IF NOT EXISTS game_accounts (
     cookie TEXT,
     email TEXT,
     password TEXT,
+    username TEXT,
     updated_at INTEGER NOT NULL,
     UNIQUE(user_id, game_uid)
 );
