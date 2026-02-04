@@ -41,7 +41,6 @@ CREATE TABLE IF NOT EXISTS raid_plan_slots (
     slot_index INTEGER NOT NULL,
     step INTEGER,
     predicted_damage REAL,
-    predicted_damage_input TEXT,
     updated_at INTEGER NOT NULL,
     UNIQUE(user_id, plan_id, account_key, slot_index)
 );

@@ -9,7 +9,6 @@ use worker::*;
 struct SlotData {
     step: Option<i64>,
     predicted_damage: Option<f64>,
-    predicted_damage_input: String,
     character_ids: Vec<i64>,
 }
 
@@ -59,7 +58,7 @@ pub async fn get_raid_plan_handler(req: Request, ctx: RouteContext<()>) -> Resul
         return error_response("no cloud data found", 404);
     }
 
-    let slot_stmt = db.prepare("SELECT plan_id, account_key, slot_index, step, predicted_damage, predicted_damage_input FROM raid_plan_slots WHERE user_id = ?1");
+    let slot_stmt = db.prepare("SELECT plan_id, account_key, slot_index, step, predicted_damage FROM raid_plan_slots WHERE user_id = ?1");
     let slot_rows = match slot_stmt.bind(&[(claims.uid as i32).into()]) {
         Ok(s) => match s.all().await {
             Ok(r) => match r.results::<RaidPlanSlotRow>() {
@@ -102,7 +101,6 @@ pub async fn get_raid_plan_handler(req: Request, ctx: RouteContext<()>) -> Resul
                 SlotData {
                     step,
                     predicted_damage,
-                    predicted_damage_input: row.predicted_damage_input,
                     character_ids: Vec::new(),
                 },
             );
@@ -118,7 +116,6 @@ pub async fn get_raid_plan_handler(req: Request, ctx: RouteContext<()>) -> Resul
             .or_insert_with(|| SlotData {
                 step: None,
                 predicted_damage: None,
-                predicted_damage_input: String::new(),
                 character_ids: Vec::new(),
             });
 
@@ -152,8 +149,7 @@ pub async fn get_raid_plan_handler(req: Request, ctx: RouteContext<()>) -> Resul
                     let slot_value = serde_json::json!({
                         "step": slot.step,
                         "characterIds": slot.character_ids,
-                        "predictedDamage": slot.predicted_damage,
-                        "predictedDamageInput": slot.predicted_damage_input
+                        "predictedDamage": slot.predicted_damage
                     });
                     if (*idx as usize) < slot_vec.len() {
                         slot_vec[*idx as usize] = slot_value;
@@ -333,18 +329,16 @@ pub async fn save_raid_plan_handler(mut req: Request, ctx: RouteContext<()>) -> 
                     serde_json::from_value::<PlanSlotPayload>(slot_value).ok()
                 };
 
-                let (step, predicted_damage, predicted_damage_input, character_ids) =
-                    match slot_payload {
-                        Some(payload) => (
-                            payload.step.unwrap_or(0),
-                            payload.predicted_damage.unwrap_or(0.0),
-                            payload.predicted_damage_input.unwrap_or_default(),
-                            payload.character_ids,
-                        ),
-                        None => (0, 0.0, String::new(), Vec::new()),
-                    };
+                let (step, predicted_damage, character_ids) = match slot_payload {
+                    Some(payload) => (
+                        payload.step.unwrap_or(0),
+                        payload.predicted_damage.unwrap_or(0.0),
+                        payload.character_ids,
+                    ),
+                    None => (0, 0.0, Vec::new()),
+                };
 
-                let insert_slot = db.prepare("INSERT OR REPLACE INTO raid_plan_slots (user_id, plan_id, account_key, slot_index, step, predicted_damage, predicted_damage_input, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)");
+                let insert_slot = db.prepare("INSERT OR REPLACE INTO raid_plan_slots (user_id, plan_id, account_key, slot_index, step, predicted_damage, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)");
                 match insert_slot.bind(&[
                     (claims.uid as i32).into(),
                     plan.id.clone().into(),
@@ -352,7 +346,6 @@ pub async fn save_raid_plan_handler(mut req: Request, ctx: RouteContext<()>) -> 
                     (idx as i64).into(),
                     step.into(),
                     predicted_damage.into(),
-                    predicted_damage_input.into(),
                     plan_updated_at.into(),
                 ]) {
                     Ok(s) => {

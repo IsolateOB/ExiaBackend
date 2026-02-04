@@ -55,7 +55,6 @@ pub struct RaidPlanSlotRow {
     pub slot_index: i64,
     pub step: i64,
     pub predicted_damage: f64,
-    pub predicted_damage_input: String,
 }
 
 #[derive(Deserialize)]
@@ -83,8 +82,6 @@ pub struct PlanSlotPayload {
     pub character_ids: Vec<i64>,
     #[serde(default, rename = "predictedDamage")]
     pub predicted_damage: Option<f64>,
-    #[serde(default, rename = "predictedDamageInput")]
-    pub predicted_damage_input: Option<String>,
 }
 
 #[derive(Deserialize)]
