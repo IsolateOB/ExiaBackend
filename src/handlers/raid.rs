@@ -331,11 +331,11 @@ pub async fn save_raid_plan_handler(mut req: Request, ctx: RouteContext<()>) -> 
 
                 let (step, predicted_damage, character_ids) = match slot_payload {
                     Some(payload) => (
-                        payload.step.unwrap_or(0),
+                        payload.step.unwrap_or(0) as f64,
                         payload.predicted_damage.unwrap_or(0.0),
                         payload.character_ids,
                     ),
-                    None => (0, 0.0, Vec::new()),
+                    None => (0.0, 0.0, Vec::new()),
                 };
 
                 let insert_slot = db.prepare("INSERT OR REPLACE INTO raid_plan_slots (user_id, plan_id, account_key, slot_index, step, predicted_damage, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)");
@@ -343,7 +343,7 @@ pub async fn save_raid_plan_handler(mut req: Request, ctx: RouteContext<()>) -> 
                     (claims.uid as i32).into(),
                     plan.id.clone().into(),
                     account_key.clone().into(),
-                    (idx as i64).into(),
+                    (idx as f64).into(),
                     step.into(),
                     predicted_damage.into(),
                     plan_updated_at.into(),
@@ -362,9 +362,9 @@ pub async fn save_raid_plan_handler(mut req: Request, ctx: RouteContext<()>) -> 
                         (claims.uid as i32).into(),
                         plan.id.clone().into(),
                         account_key.clone().into(),
-                        (idx as i64).into(),
-                        (pos as i64).into(),
-                        char_id.into(),
+                        (idx as f64).into(),
+                        (pos as f64).into(),
+                        (char_id as f64).into(),
                     ]) {
                         Ok(s) => {
                             if s.run().await.is_err() {
