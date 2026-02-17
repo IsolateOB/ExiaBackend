@@ -26,8 +26,8 @@ pub async fn login_handler(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         }
     };
 
-    if body.username.trim().is_empty() || body.password.trim().is_empty() {
-        return error_response("missing credentials", 400);
+    if body.username.trim().is_empty() {
+        return error_response("missing username", 400);
     }
 
     let stmt = db.prepare(
