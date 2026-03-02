@@ -359,3 +359,114 @@ pub async fn delete_account_handler(req: Request, ctx: RouteContext<()>) -> Resu
         200,
     )
 }
+
+pub async fn set_restricted_password_handler(
+    mut req: Request,
+    ctx: RouteContext<()>,
+) -> Result<Response> {
+    let env = ctx.env;
+    let db = match env.d1("DB") {
+        Ok(d) => d,
+        Err(_) => return error_response("database connection failed", 500),
+    };
+
+    let auth = req.headers().get("Authorization")?.unwrap_or_default();
+    if !auth.starts_with("Bearer ") {
+        return error_response("missing token", 401);
+    }
+
+    let token = auth.trim_start_matches("Bearer ").trim();
+    let secret = match get_jwt_secret(&env) {
+        Ok(s) => s,
+        Err(_) => return error_response("internal error: jwt secret missing", 500),
+    };
+    let mut validation = Validation::new(Algorithm::HS256);
+    validation.validate_exp = true;
+
+    let claims = match decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.as_bytes()),
+        &validation,
+    ) {
+        Ok(data) => data.claims,
+        Err(_) => return error_response("invalid or expired token", 401),
+    };
+
+    // Must be non-restricted to change restricted password
+    if claims.restricted {
+        return error_response("restricted mode", 403);
+    }
+
+    let body: SetRestrictedPasswordRequest = match req.json().await {
+        Ok(b) => b,
+        Err(_) => return error_response("invalid json format", 400),
+    };
+
+    // Fetch current user to verify main password
+    let stmt = db.prepare("SELECT id, username, password_hash, restricted_password_hash, avatar_url FROM users WHERE id = ?1");
+    let user: UserAuthRow = match stmt.bind(&[(claims.uid as i32).into()]) {
+        Ok(s) => match s.first::<UserAuthRow>(None).await {
+            Ok(Some(u)) => u,
+            Ok(None) => return error_response("user not found", 404),
+            Err(_) => return error_response("database error", 500),
+        },
+        Err(_) => return error_response("database error", 500),
+    };
+
+    // Verify main password
+    let parsed_hash = match PasswordHash::new(&user.password_hash) {
+        Ok(h) => h,
+        Err(_) => return error_response("internal error", 500),
+    };
+    if Argon2::default()
+        .verify_password(body.current_password.as_bytes(), &parsed_hash)
+        .is_err()
+    {
+        return error_response("current password is incorrect", 401);
+    }
+
+    // Empty restricted_password means disable restricted mode
+    if body.restricted_password.trim().is_empty() {
+        let update_stmt =
+            db.prepare("UPDATE users SET restricted_password_hash = NULL WHERE id = ?1");
+        match update_stmt.bind(&[(claims.uid as i32).into()]) {
+            Ok(s) => {
+                if s.run().await.is_err() {
+                    return error_response("failed to disable restricted mode", 500);
+                }
+            }
+            Err(_) => return error_response("database error", 500),
+        };
+        return json_response(
+            &serde_json::json!({"ok": true, "message": "restricted mode disabled"}),
+            200,
+        );
+    }
+
+    if body.restricted_password.len() < 6 {
+        return error_response("restricted password must be at least 6 characters", 400);
+    }
+
+    // Hash the new restricted password
+    let salt = SaltString::generate(&mut rand::thread_rng());
+    let restricted_hash =
+        match Argon2::default().hash_password(body.restricted_password.as_bytes(), &salt) {
+            Ok(h) => h.to_string(),
+            Err(_) => return error_response("failed to hash password", 500),
+        };
+
+    let update_stmt = db.prepare("UPDATE users SET restricted_password_hash = ?1 WHERE id = ?2");
+    match update_stmt.bind(&[restricted_hash.into(), (claims.uid as i32).into()]) {
+        Ok(s) => {
+            if s.run().await.is_err() {
+                return error_response("failed to update restricted password", 500);
+            }
+        }
+        Err(_) => return error_response("database error", 500),
+    };
+
+    json_response(
+        &serde_json::json!({"ok": true, "message": "restricted password set successfully"}),
+        200,
+    )
+}

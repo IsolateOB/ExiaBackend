@@ -31,6 +31,10 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .post_async("/change-password", user::change_password_handler)
         .post_async("/change-username", user::change_username_handler)
         .post_async("/change-avatar", user::change_avatar_handler)
+        .post_async(
+            "/set-restricted-password",
+            user::set_restricted_password_handler,
+        )
         .delete_async("/account", user::delete_account_handler)
         .get_async("/raid-plan", raid::get_raid_plan_handler)
         .post_async("/raid-plan", raid::save_raid_plan_handler)

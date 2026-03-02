@@ -30,8 +30,13 @@ pub async fn login_handler(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         return error_response("missing username", 400);
     }
 
+    // Password is now always required
+    if body.password.trim().is_empty() {
+        return error_response("missing password", 400);
+    }
+
     let stmt = db.prepare(
-        "SELECT id, username, password_hash, avatar_url FROM users WHERE username = ?1 LIMIT 1",
+        "SELECT id, username, password_hash, restricted_password_hash, avatar_url FROM users WHERE username = ?1 LIMIT 1",
     );
     let row = match stmt.bind(&[body.username.clone().into()]) {
         Ok(s) => match s.first::<UserAuthRow>(None).await {
@@ -52,25 +57,43 @@ pub async fn login_handler(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         None => return error_response("user not found", 401),
     };
 
-    let mut restricted = false;
+    // Try main password first
+    let main_hash = match PasswordHash::new(&user.password_hash) {
+        Ok(h) => h,
+        Err(e) => {
+            console_error!("Password hash parse error: {:?}", e);
+            return error_response("internal error: invalid password hash", 500);
+        }
+    };
 
-    if !body.password.trim().is_empty() {
-        let parsed_hash = match PasswordHash::new(&user.password_hash) {
+    let restricted;
+
+    if Argon2::default()
+        .verify_password(body.password.as_bytes(), &main_hash)
+        .is_ok()
+    {
+        // Main password matched — full access
+        restricted = false;
+    } else if let Some(ref rph) = user.restricted_password_hash {
+        // Try restricted password
+        let restricted_hash = match PasswordHash::new(rph) {
             Ok(h) => h,
             Err(e) => {
-                console_error!("Password hash parse error: {:?}", e);
-                return error_response("internal error: invalid password hash", 500);
+                console_error!("Restricted password hash parse error: {:?}", e);
+                return error_response("internal error", 500);
             }
         };
-
         if Argon2::default()
-            .verify_password(body.password.as_bytes(), &parsed_hash)
-            .is_err()
+            .verify_password(body.password.as_bytes(), &restricted_hash)
+            .is_ok()
         {
+            restricted = true;
+        } else {
             return error_response("incorrect password", 401);
         }
     } else {
-        restricted = true;
+        // No restricted password set, and main password didn't match
+        return error_response("incorrect password", 401);
     }
 
     let now = Utc::now();

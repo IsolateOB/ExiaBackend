@@ -16,6 +16,7 @@ pub struct UserAuthRow {
     pub id: i64,
     pub username: String,
     pub password_hash: String,
+    pub restricted_password_hash: Option<String>,
     pub avatar_url: Option<String>,
 }
 

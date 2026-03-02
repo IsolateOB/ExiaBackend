@@ -19,6 +19,14 @@ pub struct ChangePasswordRequest {
 }
 
 #[derive(Deserialize)]
+pub struct SetRestrictedPasswordRequest {
+    /// The user's main password (for identity verification)
+    pub current_password: String,
+    /// The new restricted-mode password. Empty string means disable restricted mode.
+    pub restricted_password: String,
+}
+
+#[derive(Deserialize)]
 pub struct ChangeUsernameRequest {
     pub new_username: String,
 }
