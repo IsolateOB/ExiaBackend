@@ -402,29 +402,6 @@ pub async fn set_restricted_password_handler(
         Err(_) => return error_response("invalid json format", 400),
     };
 
-    // Fetch current user to verify main password
-    let stmt = db.prepare("SELECT id, username, password_hash, restricted_password_hash, avatar_url FROM users WHERE id = ?1");
-    let user: UserAuthRow = match stmt.bind(&[(claims.uid as i32).into()]) {
-        Ok(s) => match s.first::<UserAuthRow>(None).await {
-            Ok(Some(u)) => u,
-            Ok(None) => return error_response("user not found", 404),
-            Err(_) => return error_response("database error", 500),
-        },
-        Err(_) => return error_response("database error", 500),
-    };
-
-    // Verify main password
-    let parsed_hash = match PasswordHash::new(&user.password_hash) {
-        Ok(h) => h,
-        Err(_) => return error_response("internal error", 500),
-    };
-    if Argon2::default()
-        .verify_password(body.current_password.as_bytes(), &parsed_hash)
-        .is_err()
-    {
-        return error_response("current password is incorrect", 401);
-    }
-
     // Empty restricted_password means disable restricted mode
     if body.restricted_password.trim().is_empty() {
         let update_stmt =
