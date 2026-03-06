@@ -169,6 +169,26 @@ pub fn apply_patch_to_snapshot(
     next
 }
 
+fn should_persist_snapshot_result(
+    current_plans: &[RaidPlanRealtimePlan],
+    next_plans: &[RaidPlanRealtimePlan],
+    patch: &RaidPlanRealtimePatch,
+) -> bool {
+    if current_plans == next_plans {
+        return false;
+    }
+
+    if current_plans.is_empty() {
+        return true;
+    }
+
+    if next_plans.is_empty() {
+        return matches!(patch, RaidPlanRealtimePatch::PlanDelete { .. });
+    }
+
+    true
+}
+
 #[derive(Deserialize)]
 struct DocumentRevisionRow {
     revision: i64,
@@ -842,6 +862,18 @@ impl RaidPlanRoom {
         let patch = parse_patch_message(&patch_message)?;
         let updated_at = Utc::now().timestamp();
         let next_plans = apply_patch_to_snapshot(&plans, &patch, updated_at);
+
+        if !should_persist_snapshot_result(&plans, &next_plans, &patch) {
+            return send_server_message(
+                ws,
+                &RaidRealtimeServerMessage::Ack {
+                    revision: current_revision,
+                    client_mutation_id: &patch_message.client_mutation_id,
+                    applied_patch: &patch_message,
+                },
+            );
+        }
+
         let next_revision = current_revision + 1;
 
         persist_snapshot(&self.env, attachment.user_id, next_revision, &next_plans).await?;
@@ -991,8 +1023,8 @@ pub async fn realtime_proxy_handler(req: Request, ctx: RouteContext<()>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_patch_to_snapshot, RaidPlanRealtimePatch, RaidPlanRealtimePlan, RaidPlanRealtimeSlot,
-        SlotFieldValue, SlotUpdateFieldPayload,
+        apply_patch_to_snapshot, should_persist_snapshot_result, RaidPlanRealtimePatch,
+        RaidPlanRealtimePlan, RaidPlanRealtimeSlot, SlotFieldValue, SlotUpdateFieldPayload,
     };
     use std::collections::HashMap;
 
@@ -1126,5 +1158,52 @@ mod tests {
             after_second[0].data["alpha"][0].predicted_damage,
             Some(3200.0)
         );
+    }
+
+    #[test]
+    fn noop_duplicate_patch_does_not_require_persist() {
+        let plans = vec![make_plan()];
+        let patch = RaidPlanRealtimePatch::PlanDuplicate {
+            client_mutation_id: "m-1".to_string(),
+            session_id: "s-1".to_string(),
+            base_revision: 1,
+            source_plan_id: "missing".to_string(),
+            new_plan_id: "copy".to_string(),
+            name: "Copy".to_string(),
+        };
+
+        let next_plans = apply_patch_to_snapshot(&plans, &patch, 200);
+
+        assert!(!should_persist_snapshot_result(&plans, &next_plans, &patch));
+    }
+
+    #[test]
+    fn non_delete_patch_cannot_replace_existing_snapshot_with_empty_plans() {
+        let plans = vec![make_plan()];
+        let patch = RaidPlanRealtimePatch::PlanRename {
+            client_mutation_id: "m-1".to_string(),
+            session_id: "s-1".to_string(),
+            base_revision: 1,
+            plan_id: "main".to_string(),
+            name: "Renamed".to_string(),
+        };
+
+        assert!(!should_persist_snapshot_result(&plans, &Vec::new(), &patch));
+    }
+
+    #[test]
+    fn deleting_last_plan_is_still_allowed_to_persist() {
+        let plans = vec![make_plan()];
+        let patch = RaidPlanRealtimePatch::PlanDelete {
+            client_mutation_id: "m-1".to_string(),
+            session_id: "s-1".to_string(),
+            base_revision: 1,
+            plan_id: "main".to_string(),
+        };
+
+        let next_plans = apply_patch_to_snapshot(&plans, &patch, 200);
+
+        assert!(should_persist_snapshot_result(&plans, &next_plans, &patch));
+        assert!(next_plans.is_empty());
     }
 }
