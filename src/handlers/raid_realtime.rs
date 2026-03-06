@@ -652,7 +652,7 @@ async fn find_existing_patch(
     client_mutation_id: &str,
 ) -> Result<Option<(i64, RaidRealtimePatchMessage)>> {
     let db = env.d1("DB")?;
-    let rows = db
+    let result = match db
         .prepare(
             "SELECT revision, session_id, client_mutation_id, patch_json FROM raid_plan_patch_events WHERE user_id = ?1 AND document_id = ?2 AND client_mutation_id = ?3 LIMIT 1",
         )
@@ -662,7 +662,14 @@ async fn find_existing_patch(
             client_mutation_id.into(),
         ])?
         .all()
-        .await?
+        .await
+    {
+        Ok(result) => result,
+        Err(error) if is_missing_patch_events_table_error(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+
+    let rows = result
         .results::<PatchEventRow>()
         .map_err(|e| Error::RustError(format!("database parse error: {e}")))?;
 
@@ -686,7 +693,7 @@ async fn record_patch_event(
         .map_err(|_| Error::RustError("patch serialize failed".into()))?;
     let now = Utc::now().timestamp();
 
-    db.prepare(
+    match db.prepare(
         "INSERT OR REPLACE INTO raid_plan_patch_events (user_id, document_id, revision, client_mutation_id, session_id, op, patch_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
     )
     .bind(&[
@@ -700,11 +707,16 @@ async fn record_patch_event(
         now.into(),
     ])?
     .run()
-    .await?;
+    .await
+    {
+        Ok(_) => {}
+        Err(error) if is_missing_patch_events_table_error(&error) => return Ok(()),
+        Err(error) => return Err(error),
+    }
 
     let prune_before = revision - 200;
     if prune_before > 0 {
-        db.prepare(
+        match db.prepare(
             "DELETE FROM raid_plan_patch_events WHERE user_id = ?1 AND document_id = ?2 AND revision <= ?3",
         )
         .bind(&[
@@ -713,10 +725,20 @@ async fn record_patch_event(
             prune_before.into(),
         ])?
         .run()
-        .await?;
+        .await
+        {
+            Ok(_) => {}
+            Err(error) if is_missing_patch_events_table_error(&error) => return Ok(()),
+            Err(error) => return Err(error),
+        }
     }
 
     Ok(())
+}
+
+fn is_missing_patch_events_table_error(error: &Error) -> bool {
+    let message = format!("{error:?}").to_ascii_lowercase();
+    message.contains("no such table") && message.contains("raid_plan_patch_events")
 }
 
 async fn load_patch_replay(
@@ -730,7 +752,7 @@ async fn load_patch_replay(
     }
 
     let db = env.d1("DB")?;
-    let rows = db
+    let result = match db
         .prepare(
             "SELECT revision, session_id, client_mutation_id, patch_json FROM raid_plan_patch_events WHERE user_id = ?1 AND document_id = ?2 AND revision > ?3 ORDER BY revision ASC",
         )
@@ -740,7 +762,14 @@ async fn load_patch_replay(
             last_revision.into(),
         ])?
         .all()
-        .await?
+        .await
+    {
+        Ok(result) => result,
+        Err(error) if is_missing_patch_events_table_error(&error) => return Ok(None),
+        Err(error) => return Err(error),
+    };
+
+    let rows = result
         .results::<PatchEventRow>()
         .map_err(|e| Error::RustError(format!("database parse error: {e}")))?;
 
@@ -980,7 +1009,19 @@ impl DurableObject for RaidPlanRoom {
                 self.handle_hello(&ws, token, document_id, last_revision, session_id)
                     .await
             }
-            RaidRealtimeClientMessage::Patch(patch) => self.handle_patch(&ws, patch).await,
+            RaidRealtimeClientMessage::Patch(patch) => {
+                if let Err(error) = self.handle_patch(&ws, patch).await {
+                    console_error!("raid realtime patch error: {:?}", error);
+                    send_server_message(
+                        &ws,
+                        &RaidRealtimeServerMessage::Error {
+                            code: "patch_failed",
+                            message: "failed to apply realtime patch",
+                        },
+                    )?;
+                }
+                Ok(())
+            }
         }
     }
 
@@ -1030,10 +1071,12 @@ pub async fn realtime_proxy_handler(req: Request, ctx: RouteContext<()>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_patch_to_snapshot, should_persist_snapshot_result, RaidPlanRealtimePatch,
-        RaidPlanRealtimePlan, RaidPlanRealtimeSlot, SlotFieldValue, SlotUpdateFieldPayload,
+        apply_patch_to_snapshot, is_missing_patch_events_table_error,
+        should_persist_snapshot_result, RaidPlanRealtimePatch, RaidPlanRealtimePlan,
+        RaidPlanRealtimeSlot, SlotFieldValue, SlotUpdateFieldPayload,
     };
     use std::collections::HashMap;
+    use worker::Error;
 
     fn make_slot(
         step: Option<i64>,
@@ -1212,5 +1255,21 @@ mod tests {
 
         assert!(should_persist_snapshot_result(&plans, &next_plans, &patch));
         assert!(next_plans.is_empty());
+    }
+
+    #[test]
+    fn recognizes_missing_patch_events_table_errors() {
+        let error = Error::RustError(
+            "D1_ERROR: no such table: raid_plan_patch_events: SQLITE_ERROR".to_string(),
+        );
+
+        assert!(is_missing_patch_events_table_error(&error));
+    }
+
+    #[test]
+    fn does_not_hide_unrelated_database_errors() {
+        let error = Error::RustError("D1_ERROR: no such table: raid_plan_documents".to_string());
+
+        assert!(!is_missing_patch_events_table_error(&error));
     }
 }
