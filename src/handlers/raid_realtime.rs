@@ -5,6 +5,7 @@ use crate::utils::{
     decode_claims_token, error_response, get_jwt_secret, json_response, parse_game_openid,
 };
 use chrono::Utc;
+use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -770,6 +771,7 @@ fn send_server_message(ws: &WebSocket, message: &RaidRealtimeServerMessage<'_>) 
 pub struct RaidPlanRoom {
     state: State,
     env: Env,
+    patch_lock: Mutex<()>,
 }
 
 impl RaidPlanRoom {
@@ -827,6 +829,7 @@ impl RaidPlanRoom {
         ws: &WebSocket,
         patch_message: RaidRealtimePatchMessage,
     ) -> Result<()> {
+        let _patch_guard = self.patch_lock.lock().await;
         let attachment = ws
             .deserialize_attachment::<SocketAttachment>()?
             .unwrap_or_default();
@@ -911,7 +914,11 @@ impl RaidPlanRoom {
 
 impl DurableObject for RaidPlanRoom {
     fn new(state: State, env: Env) -> Self {
-        Self { state, env }
+        Self {
+            state,
+            env,
+            patch_lock: Mutex::new(()),
+        }
     }
 
     async fn fetch(&self, req: Request) -> Result<Response> {
