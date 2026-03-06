@@ -20,4 +20,4 @@ class_name = "RaidPlanRoom"
 
 [[migrations]]
 tag = "v1"
-new_classes = ["RaidPlanRoom"]
+new_sqlite_classes = ["RaidPlanRoom"]
