@@ -1,7 +1,6 @@
 use crate::models::*;
 use crate::utils::*;
 use chrono::Utc;
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
 use worker::*;
 
 pub async fn get_accounts_handler(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -21,15 +20,8 @@ pub async fn get_accounts_handler(req: Request, ctx: RouteContext<()>) -> Result
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
@@ -125,15 +117,8 @@ pub async fn get_characters_handler(req: Request, ctx: RouteContext<()>) -> Resu
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
@@ -198,15 +183,8 @@ pub async fn save_accounts_handler(mut req: Request, ctx: RouteContext<()>) -> R
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
@@ -376,15 +354,8 @@ pub async fn save_characters_handler(mut req: Request, ctx: RouteContext<()>) ->
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 

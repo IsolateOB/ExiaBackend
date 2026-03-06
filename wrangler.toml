@@ -13,3 +13,11 @@ JWT_ISSUER = "exia-backend"
 binding = "DB"
 database_name = "exia_backend"
 database_id = "89bda42d-177b-4184-bdc2-2b4e34892abd"
+
+[[durable_objects.bindings]]
+name = "RAID_PLAN_ROOM"
+class_name = "RaidPlanRoom"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["RaidPlanRoom"]

@@ -5,7 +5,6 @@ use argon2::{
     Argon2,
 };
 use chrono::{Duration, Utc};
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use worker::*;
 
 pub async fn get_user_profile(req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -21,18 +20,11 @@ pub async fn get_user_profile(req: Request, ctx: RouteContext<()>) -> Result<Res
 
     let token = auth.trim_start_matches("Bearer ").trim();
     let secret = get_jwt_secret(&env)?;
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    )
-    .map_err(|_| Error::RustError("invalid token".into()))?;
+    let data = decode_claims_token(token, &secret, Utc::now().timestamp())
+        .map_err(|_| Error::RustError("invalid token".into()))?;
 
     let stmt = db.prepare("SELECT username, avatar_url FROM users WHERE id = ?1");
-    let profile = match stmt.bind(&[(data.claims.uid as i32).into()]) {
+    let profile = match stmt.bind(&[(data.uid as i32).into()]) {
         Ok(s) => match s.first::<UserProfileRow>(None).await {
             Ok(Some(r)) => r,
             Ok(None) => return error_response("user not found", 404),
@@ -43,7 +35,7 @@ pub async fn get_user_profile(req: Request, ctx: RouteContext<()>) -> Result<Res
 
     json_response(
         &serde_json::json!({
-            "user_id": data.claims.uid,
+            "user_id": data.uid,
             "username": profile.username,
             "avatar_url": profile.avatar_url
         }),
@@ -69,15 +61,8 @@ pub async fn change_password_handler(mut req: Request, ctx: RouteContext<()>) ->
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
@@ -162,15 +147,8 @@ pub async fn change_username_handler(mut req: Request, ctx: RouteContext<()>) ->
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
@@ -227,11 +205,7 @@ pub async fn change_username_handler(mut req: Request, ctx: RouteContext<()>) ->
         restricted: claims.restricted,
     };
 
-    let new_token = match encode(
-        &Header::default(),
-        &new_claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    ) {
+    let new_token = match encode_claims_token(&new_claims, &secret) {
         Ok(t) => t,
         Err(_) => return error_response("failed to generate token", 500),
     };
@@ -264,15 +238,8 @@ pub async fn change_avatar_handler(mut req: Request, ctx: RouteContext<()>) -> R
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
@@ -327,15 +294,8 @@ pub async fn delete_account_handler(req: Request, ctx: RouteContext<()>) -> Resu
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 
@@ -380,15 +340,8 @@ pub async fn set_restricted_password_handler(
         Ok(s) => s,
         Err(_) => return error_response("internal error: jwt secret missing", 500),
     };
-    let mut validation = Validation::new(Algorithm::HS256);
-    validation.validate_exp = true;
-
-    let claims = match decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(secret.as_bytes()),
-        &validation,
-    ) {
-        Ok(data) => data.claims,
+    let claims = match decode_claims_token(token, &secret, Utc::now().timestamp()) {
+        Ok(data) => data,
         Err(_) => return error_response("invalid or expired token", 401),
     };
 

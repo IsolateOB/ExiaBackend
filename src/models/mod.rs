@@ -68,24 +68,6 @@ pub struct RaidPlanSlotCharRow {
 }
 
 #[derive(Deserialize)]
-pub struct RaidPlanPayload {
-    pub id: String,
-    pub name: String,
-    pub data: serde_json::Value,
-    #[serde(rename = "updatedAt")]
-    pub updated_at: Option<i64>,
-}
-
-#[derive(Deserialize)]
-pub struct PlanSlotPayload {
-    pub step: Option<i64>,
-    #[serde(default, rename = "characterIds")]
-    pub character_ids: Vec<i64>,
-    #[serde(default, rename = "predictedDamage")]
-    pub predicted_damage: Option<f64>,
-}
-
-#[derive(Deserialize)]
 pub struct TeamTemplateMetaRow {
     pub template_id: String,
     pub name: String,
@@ -147,7 +129,7 @@ pub struct GameAccountLookupRow {
     pub cookie: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Claims {
     pub sub: String,
     pub uid: i64,

@@ -5,7 +5,6 @@ use argon2::{
     Argon2,
 };
 use chrono::{Duration, Utc};
-use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use worker::*;
 
 pub async fn login_handler(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
@@ -119,11 +118,7 @@ pub async fn login_handler(mut req: Request, ctx: RouteContext<()>) -> Result<Re
         restricted,
     };
 
-    let token = match encode(
-        &Header::new(Algorithm::HS256),
-        &claims,
-        &EncodingKey::from_secret(secret.as_bytes()),
-    ) {
+    let token = match encode_claims_token(&claims, &secret) {
         Ok(t) => t,
         Err(e) => {
             console_error!("Token encode error: {:?}", e);

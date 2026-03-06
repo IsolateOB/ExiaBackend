@@ -1,3 +1,6 @@
+mod jwt;
+pub use jwt::*;
+
 use serde::Serialize;
 use worker::*;
 

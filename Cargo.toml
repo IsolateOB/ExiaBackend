@@ -10,8 +10,10 @@ crate-type = ["cdylib"]
 worker = { version = "*", features = ["d1"] }
 serde = { version = "*", features = ["derive"] }
 serde_json = "*"
-jsonwebtoken = "*"
 chrono = { version = "*", features = ["serde"] }
 argon2 = "*"
 rand = "*"
 getrandom = { version = "*", features = ["js"] }
+base64 = "*"
+hmac = "*"
+sha2 = "*"

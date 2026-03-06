@@ -35,11 +35,6 @@ pub struct ChangeAvatarRequest {
 }
 
 #[derive(Deserialize)]
-pub struct SaveRaidPlanRequest {
-    pub plan_data: serde_json::Value,
-}
-
-#[derive(Deserialize)]
 pub struct SaveTeamTemplateRequest {
     pub template_data: serde_json::Value,
 }

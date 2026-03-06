@@ -4,7 +4,7 @@ mod handlers;
 mod models;
 mod utils;
 
-use handlers::{auth, data, raid, team, user};
+use handlers::{auth, data, raid_realtime, team, user};
 use utils::cors_headers;
 use utils::json_response;
 
@@ -36,8 +36,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             user::set_restricted_password_handler,
         )
         .delete_async("/account", user::delete_account_handler)
-        .get_async("/raid-plan", raid::get_raid_plan_handler)
-        .post_async("/raid-plan", raid::save_raid_plan_handler)
+        .get_async("/raid-plan/realtime", raid_realtime::realtime_proxy_handler)
         .get_async("/team-template", team::get_team_template_handler)
         .post_async("/team-template", team::save_team_template_handler)
         .get_async("/accounts", data::get_accounts_handler)
