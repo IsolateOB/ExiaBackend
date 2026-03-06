@@ -590,7 +590,7 @@ async fn persist_snapshot(
             (user_id as i32).into(),
             plan.id.clone().into(),
             plan.name.clone().into(),
-            plan_updated_at.into(),
+            to_d1_number(plan_updated_at).into(),
         ])?
         .run()
         .await?;
@@ -608,7 +608,7 @@ async fn persist_snapshot(
                 plan.id.clone().into(),
                 account_key.clone().into(),
                 game_uid.into(),
-                plan_updated_at.into(),
+                to_d1_number(plan_updated_at).into(),
             ])?
             .run()
             .await;
@@ -627,9 +627,9 @@ async fn persist_snapshot(
                     plan.id.clone().into(),
                     account_key.clone().into(),
                     (slot_index as i32).into(),
-                    slot.step.unwrap_or(0).into(),
+                    to_d1_number(slot.step.unwrap_or(0)).into(),
                     slot.predicted_damage.unwrap_or(0.0).into(),
-                    plan_updated_at.into(),
+                    to_d1_number(plan_updated_at).into(),
                 ])?
                 .run()
                 .await?;
@@ -659,8 +659,8 @@ async fn persist_snapshot(
     .bind(&[
         (user_id as i32).into(),
         "raid-plan".into(),
-        revision.into(),
-        now.into(),
+        to_d1_number(revision).into(),
+        to_d1_number(now).into(),
     ])?
     .run()
     .await?;
@@ -721,12 +721,12 @@ async fn record_patch_event(
     .bind(&[
         (user_id as i32).into(),
         "raid-plan".into(),
-        revision.into(),
+        to_d1_number(revision).into(),
         patch.client_mutation_id.clone().into(),
         patch.session_id.clone().into(),
         patch.op.clone().into(),
         patch_json.into(),
-        now.into(),
+        to_d1_number(now).into(),
     ])?
     .run()
     .await
@@ -744,7 +744,7 @@ async fn record_patch_event(
         .bind(&[
             (user_id as i32).into(),
             "raid-plan".into(),
-            prune_before.into(),
+            to_d1_number(prune_before).into(),
         ])?
         .run()
         .await
@@ -756,6 +756,10 @@ async fn record_patch_event(
     }
 
     Ok(())
+}
+
+fn to_d1_number(value: i64) -> f64 {
+    value as f64
 }
 
 fn is_missing_table_error(error: &Error, table_name: &str) -> bool {
@@ -785,7 +789,7 @@ async fn load_patch_replay(
         .bind(&[
             (user_id as i32).into(),
             "raid-plan".into(),
-            last_revision.into(),
+            to_d1_number(last_revision).into(),
         ])?
         .all()
         .await
@@ -1121,7 +1125,7 @@ mod tests {
     use super::{
         apply_patch_to_snapshot, is_missing_patch_events_table_error, is_missing_table_error,
         should_persist_snapshot_result, RaidPlanRealtimePatch, RaidPlanRealtimePlan,
-        RaidPlanRealtimeSlot, SlotFieldValue, SlotUpdateFieldPayload,
+        RaidPlanRealtimeSlot, SlotFieldValue, SlotUpdateFieldPayload, to_d1_number,
     };
     use std::collections::HashMap;
     use worker::Error;
@@ -1334,5 +1338,11 @@ mod tests {
         let error = Error::RustError("D1_ERROR: no such table: game_accounts".to_string());
 
         assert!(is_missing_table_error(&error, "game_accounts"));
+    }
+
+    #[test]
+    fn converts_i64_values_to_d1_number_parameters() {
+        assert_eq!(to_d1_number(1_772_832_011), 1_772_832_011_f64);
+        assert_eq!(to_d1_number(3), 3_f64);
     }
 }
