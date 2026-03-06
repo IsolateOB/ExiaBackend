@@ -517,11 +517,20 @@ async fn load_snapshot(env: &Env, user_id: i64) -> Result<Vec<RaidPlanRealtimePl
 
 async fn load_account_key_map(env: &Env, user_id: i64) -> Result<HashMap<String, String>> {
     let db = env.d1("DB")?;
-    let rows = db
+    let result = match db
         .prepare("SELECT game_uid, cookie FROM game_accounts WHERE user_id = ?1")
         .bind(&[(user_id as i32).into()])?
         .all()
-        .await?
+        .await
+    {
+        Ok(result) => result,
+        Err(error) if is_missing_table_error(&error, "game_accounts") => {
+            return Ok(HashMap::new())
+        }
+        Err(error) => return Err(error),
+    };
+
+    let rows = result
         .results::<GameAccountLookupRow>()
         .map_err(|e| Error::RustError(format!("database parse error: {e}")))?;
 
@@ -554,10 +563,18 @@ async fn persist_snapshot(
         "DELETE FROM raid_plan_accounts WHERE user_id = ?1",
         "DELETE FROM raid_plans WHERE user_id = ?1",
     ] {
-        db.prepare(sql)
+        let result = db
+            .prepare(sql)
             .bind(&[(user_id as i32).into()])?
             .run()
-            .await?;
+            .await;
+        match result {
+            Ok(_) => {}
+            Err(error)
+                if sql.contains("raid_plan_accounts")
+                    && is_missing_table_error(&error, "raid_plan_accounts") => {}
+            Err(error) => return Err(error),
+        }
     }
 
     for plan in plans {
@@ -583,7 +600,7 @@ async fn persist_snapshot(
                 .get(account_key)
                 .cloned()
                 .unwrap_or_default();
-            db.prepare(
+            let result = db.prepare(
                 "INSERT OR REPLACE INTO raid_plan_accounts (user_id, plan_id, account_key, game_uid, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             )
             .bind(&[
@@ -594,7 +611,12 @@ async fn persist_snapshot(
                 plan_updated_at.into(),
             ])?
             .run()
-            .await?;
+            .await;
+            match result {
+                Ok(_) => {}
+                Err(error) if is_missing_table_error(&error, "raid_plan_accounts") => {}
+                Err(error) => return Err(error),
+            }
 
             for (slot_index, slot) in slots.iter().enumerate() {
                 db.prepare(
@@ -736,9 +758,13 @@ async fn record_patch_event(
     Ok(())
 }
 
-fn is_missing_patch_events_table_error(error: &Error) -> bool {
+fn is_missing_table_error(error: &Error, table_name: &str) -> bool {
     let message = format!("{error:?}").to_ascii_lowercase();
-    message.contains("no such table") && message.contains("raid_plan_patch_events")
+    message.contains("no such table") && message.contains(&table_name.to_ascii_lowercase())
+}
+
+fn is_missing_patch_events_table_error(error: &Error) -> bool {
+    is_missing_table_error(error, "raid_plan_patch_events")
 }
 
 async fn load_patch_replay(
@@ -794,6 +820,23 @@ async fn load_patch_replay(
 
 fn send_server_message(ws: &WebSocket, message: &RaidRealtimeServerMessage<'_>) -> Result<()> {
     ws.send(message)
+}
+
+fn send_runtime_error_message(ws: &WebSocket, code: &str, message: String) -> Result<()> {
+    ws.send(&serde_json::json!({
+        "type": "error",
+        "code": code,
+        "message": message,
+    }))
+}
+
+fn format_runtime_error(error: &Error) -> String {
+    let message = format!("{error:?}");
+    if message.len() > 400 {
+        format!("{}...", &message[..400])
+    } else {
+        message
+    }
 }
 
 #[durable_object]
@@ -1012,13 +1055,18 @@ impl DurableObject for RaidPlanRoom {
             RaidRealtimeClientMessage::Patch(patch) => {
                 if let Err(error) = self.handle_patch(&ws, patch).await {
                     console_error!("raid realtime patch error: {:?}", error);
-                    send_server_message(
-                        &ws,
-                        &RaidRealtimeServerMessage::Error {
-                            code: "patch_failed",
-                            message: "failed to apply realtime patch",
-                        },
-                    )?;
+                    let code = if is_missing_patch_events_table_error(&error) {
+                        "missing_patch_events_table"
+                    } else if is_missing_table_error(&error, "raid_plan_accounts") {
+                        "missing_raid_plan_accounts_table"
+                    } else if is_missing_table_error(&error, "game_accounts") {
+                        "missing_game_accounts_table"
+                    } else if is_missing_table_error(&error, "raid_plan_documents") {
+                        "missing_raid_plan_documents_table"
+                    } else {
+                        "patch_failed"
+                    };
+                    send_runtime_error_message(&ws, code, format_runtime_error(&error))?;
                 }
                 Ok(())
             }
@@ -1071,7 +1119,7 @@ pub async fn realtime_proxy_handler(req: Request, ctx: RouteContext<()>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_patch_to_snapshot, is_missing_patch_events_table_error,
+        apply_patch_to_snapshot, is_missing_patch_events_table_error, is_missing_table_error,
         should_persist_snapshot_result, RaidPlanRealtimePatch, RaidPlanRealtimePlan,
         RaidPlanRealtimeSlot, SlotFieldValue, SlotUpdateFieldPayload,
     };
@@ -1271,5 +1319,20 @@ mod tests {
         let error = Error::RustError("D1_ERROR: no such table: raid_plan_documents".to_string());
 
         assert!(!is_missing_patch_events_table_error(&error));
+    }
+
+    #[test]
+    fn recognizes_missing_raid_plan_accounts_table_errors() {
+        let error =
+            Error::RustError("D1_ERROR: no such table: raid_plan_accounts".to_string());
+
+        assert!(is_missing_table_error(&error, "raid_plan_accounts"));
+    }
+
+    #[test]
+    fn recognizes_missing_game_accounts_table_errors() {
+        let error = Error::RustError("D1_ERROR: no such table: game_accounts".to_string());
+
+        assert!(is_missing_table_error(&error, "game_accounts"));
     }
 }
