@@ -18,6 +18,14 @@ database_id = "89bda42d-177b-4184-bdc2-2b4e34892abd"
 name = "RAID_PLAN_ROOM"
 class_name = "RaidPlanRoom"
 
+[[durable_objects.bindings]]
+name = "TEAM_TEMPLATE_ROOM"
+class_name = "TeamTemplateRoom"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RaidPlanRoom"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["TeamTemplateRoom"]

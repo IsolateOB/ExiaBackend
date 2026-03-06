@@ -4,7 +4,7 @@ mod handlers;
 mod models;
 mod utils;
 
-use handlers::{auth, data, raid_realtime, team, user};
+use handlers::{auth, data, raid_realtime, team, team_realtime, user};
 use utils::cors_headers;
 use utils::json_response;
 
@@ -37,6 +37,7 @@ pub async fn main(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         )
         .delete_async("/account", user::delete_account_handler)
         .get_async("/raid-plan/realtime", raid_realtime::realtime_proxy_handler)
+        .get_async("/team-template/realtime", team_realtime::realtime_proxy_handler)
         .get_async("/team-template", team::get_team_template_handler)
         .post_async("/team-template", team::save_team_template_handler)
         .get_async("/accounts", data::get_accounts_handler)
