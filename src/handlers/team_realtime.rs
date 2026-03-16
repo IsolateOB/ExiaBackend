@@ -1,5 +1,8 @@
 use crate::models::{Claims, TeamTemplateMemberRow, TeamTemplateMetaRow};
-use crate::utils::{decode_claims_token, error_response, get_jwt_secret, json_response};
+use crate::utils::{
+    decode_claims_token, error_response, get_jwt_secret, is_local_only_team_template_id,
+    json_response, validate_cloud_template_id, LOCAL_ONLY_TEAM_TEMPLATE_ERROR,
+};
 use chrono::Utc;
 use futures::lock::Mutex;
 use serde::{Deserialize, Serialize};
@@ -294,8 +297,10 @@ fn validate_token(env: &Env, token: &str) -> Result<Claims> {
         .map_err(|_| Error::RustError("invalid or expired token".into()))
 }
 
-fn parse_patch_message(message: &TeamTemplateRealtimePatchMessage) -> Result<TeamTemplateRealtimePatch> {
-    match message.op.as_str() {
+fn parse_patch_message(
+    message: &TeamTemplateRealtimePatchMessage,
+) -> Result<TeamTemplateRealtimePatch> {
+    let patch: Result<TeamTemplateRealtimePatch> = match message.op.as_str() {
         "template.create" => {
             let payload: TemplateCreatePayload = serde_json::from_value(message.payload.clone())
                 .map_err(|_| Error::RustError("invalid template.create payload".into()))?;
@@ -342,8 +347,9 @@ fn parse_patch_message(message: &TeamTemplateRealtimePatchMessage) -> Result<Tea
         }
         "template.replaceMembers" => {
             let payload: TemplateReplaceMembersPayload =
-                serde_json::from_value(message.payload.clone())
-                    .map_err(|_| Error::RustError("invalid template.replaceMembers payload".into()))?;
+                serde_json::from_value(message.payload.clone()).map_err(|_| {
+                    Error::RustError("invalid template.replaceMembers payload".into())
+                })?;
             Ok(TeamTemplateRealtimePatch::TemplateReplaceMembers {
                 client_mutation_id: message.client_mutation_id.clone(),
                 session_id: message.session_id.clone(),
@@ -353,7 +359,30 @@ fn parse_patch_message(message: &TeamTemplateRealtimePatchMessage) -> Result<Tea
                 total_damage_coefficient: payload.total_damage_coefficient,
             })
         }
-        _ => Err(Error::RustError("unsupported template patch op".into())),
+        _ => return Err(Error::RustError("unsupported template patch op".into())),
+    };
+    let patch = patch?;
+
+    validate_patch_targets_for_cloud(&patch)?;
+    Ok(patch)
+}
+
+fn validate_patch_targets_for_cloud(patch: &TeamTemplateRealtimePatch) -> Result<()> {
+    match patch {
+        TeamTemplateRealtimePatch::TemplateCreate { template_id, .. }
+        | TeamTemplateRealtimePatch::TemplateRename { template_id, .. }
+        | TeamTemplateRealtimePatch::TemplateDelete { template_id, .. }
+        | TeamTemplateRealtimePatch::TemplateReplaceMembers { template_id, .. } => {
+            validate_cloud_template_id(template_id).map_err(Error::RustError)
+        }
+        TeamTemplateRealtimePatch::TemplateDuplicate {
+            source_template_id,
+            new_template_id,
+            ..
+        } => {
+            validate_cloud_template_id(source_template_id).map_err(Error::RustError)?;
+            validate_cloud_template_id(new_template_id).map_err(Error::RustError)
+        }
     }
 }
 
@@ -416,21 +445,32 @@ async fn load_snapshot(env: &Env, user_id: i64) -> Result<Vec<TeamTemplateRealti
             });
     }
 
-    Ok(templates
+    Ok(sanitize_snapshot_templates(
+        templates
+            .into_iter()
+            .map(|template| {
+                let mut members = member_map.remove(&template.template_id).unwrap_or_default();
+                members.sort_by_key(|member| member.position);
+                TeamTemplateRealtimeTemplate {
+                    id: template.template_id,
+                    name: template.name,
+                    created_at: template.created_at,
+                    updated_at: template.updated_at,
+                    members,
+                    total_damage_coefficient: template.total_damage_coefficient,
+                }
+            })
+            .collect(),
+    ))
+}
+
+fn sanitize_snapshot_templates(
+    templates: Vec<TeamTemplateRealtimeTemplate>,
+) -> Vec<TeamTemplateRealtimeTemplate> {
+    templates
         .into_iter()
-        .map(|template| {
-            let mut members = member_map.remove(&template.template_id).unwrap_or_default();
-            members.sort_by_key(|member| member.position);
-            TeamTemplateRealtimeTemplate {
-                id: template.template_id,
-                name: template.name,
-                created_at: template.created_at,
-                updated_at: template.updated_at,
-                members,
-                total_damage_coefficient: template.total_damage_coefficient,
-            }
-        })
-        .collect())
+        .filter(|template| !is_local_only_team_template_id(&template.id))
+        .collect()
 }
 
 async fn persist_snapshot(
@@ -439,6 +479,16 @@ async fn persist_snapshot(
     revision: i64,
     templates: &[TeamTemplateRealtimeTemplate],
 ) -> Result<()> {
+    if let Some(template) = templates
+        .iter()
+        .find(|template| is_local_only_team_template_id(&template.id))
+    {
+        return Err(Error::RustError(format!(
+            "{LOCAL_ONLY_TEAM_TEMPLATE_ERROR}: {}",
+            template.id
+        )));
+    }
+
     let db = env.d1("DB")?;
     let now = Utc::now().timestamp();
     let existing = db
@@ -449,7 +499,10 @@ async fn persist_snapshot(
     let existing_ids = existing
         .results::<TemplateIdRow>()
         .map_err(|e| Error::RustError(format!("database parse error: {e}")))?;
-    let next_ids: HashSet<String> = templates.iter().map(|template| template.id.clone()).collect();
+    let next_ids: HashSet<String> = templates
+        .iter()
+        .map(|template| template.id.clone())
+        .collect();
 
     for row in existing_ids {
         if next_ids.contains(&row.template_id) {
@@ -634,6 +687,10 @@ fn is_missing_patch_events_table_error(error: &Error) -> bool {
     is_missing_table_error(error, "team_template_patch_events")
 }
 
+fn is_local_only_template_error(error: &Error) -> bool {
+    format!("{error:?}").contains(LOCAL_ONLY_TEAM_TEMPLATE_ERROR)
+}
+
 async fn load_patch_replay(
     env: &Env,
     user_id: i64,
@@ -685,7 +742,10 @@ async fn load_patch_replay(
     Ok(Some(patches))
 }
 
-fn send_server_message(ws: &WebSocket, message: &TeamTemplateRealtimeServerMessage<'_>) -> Result<()> {
+fn send_server_message(
+    ws: &WebSocket,
+    message: &TeamTemplateRealtimeServerMessage<'_>,
+) -> Result<()> {
     ws.send(message)
 }
 
@@ -819,7 +879,13 @@ impl TeamTemplateRoom {
         }
 
         let next_revision = current_revision + 1;
-        persist_snapshot(&self.env, attachment.user_id, next_revision, &next_templates).await?;
+        persist_snapshot(
+            &self.env,
+            attachment.user_id,
+            next_revision,
+            &next_templates,
+        )
+        .await?;
         record_patch_event(&self.env, attachment.user_id, next_revision, &patch_message).await?;
 
         send_server_message(
@@ -923,7 +989,9 @@ impl DurableObject for TeamTemplateRoom {
             TeamTemplateRealtimeClientMessage::Patch(patch) => {
                 if let Err(error) = self.handle_patch(&ws, patch).await {
                     console_error!("team template realtime patch error: {:?}", error);
-                    let code = if is_missing_patch_events_table_error(&error) {
+                    let code = if is_local_only_template_error(&error) {
+                        "local_only_template"
+                    } else if is_missing_patch_events_table_error(&error) {
                         "missing_patch_events_table"
                     } else if is_missing_table_error(&error, "team_template_documents") {
                         "missing_team_template_documents_table"
@@ -983,9 +1051,10 @@ pub async fn realtime_proxy_handler(req: Request, ctx: RouteContext<()>) -> Resu
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_patch_to_snapshot, is_missing_patch_events_table_error,
-        should_persist_snapshot_result, to_d1_number, TeamTemplateRealtimeMember,
-        TeamTemplateRealtimePatch, TeamTemplateRealtimeTemplate,
+        apply_patch_to_snapshot, is_missing_patch_events_table_error, parse_patch_message,
+        sanitize_snapshot_templates, should_persist_snapshot_result, to_d1_number,
+        TeamTemplateRealtimeMember, TeamTemplateRealtimePatch, TeamTemplateRealtimePatchMessage,
+        TeamTemplateRealtimeTemplate,
     };
     use serde_json::json;
     use worker::Error;
@@ -1008,6 +1077,19 @@ mod tests {
                 coefficients: json!({ "axisAttack": 1 }),
             }],
             total_damage_coefficient: damage_coefficient,
+        }
+    }
+
+    fn make_patch_message(
+        op: &str,
+        payload: serde_json::Value,
+    ) -> TeamTemplateRealtimePatchMessage {
+        TeamTemplateRealtimePatchMessage {
+            client_mutation_id: "m-1".to_string(),
+            session_id: "s-1".to_string(),
+            base_revision: 1,
+            op: op.to_string(),
+            payload,
         }
     }
 
@@ -1036,6 +1118,53 @@ mod tests {
         assert_eq!(updated[0].members[0].character_id.as_deref(), Some("1001"));
         assert_eq!(updated[1].members[0].character_id.as_deref(), Some("3001"));
         assert_eq!(updated[1].total_damage_coefficient, 3.0);
+    }
+
+    #[test]
+    fn template_create_patch_rejects_local_only_template_ids() {
+        let error = parse_patch_message(&make_patch_message(
+            "template.create",
+            json!({
+                "templateId": "__raid_copy__",
+                "name": "Temporary copy",
+            }),
+        ))
+        .expect_err("local-only template ids should be rejected");
+
+        assert!(
+            format!("{error:?}").contains("local-only team templates cannot be stored in cloud")
+        );
+    }
+
+    #[test]
+    fn template_duplicate_patch_rejects_conflict_copy_ids() {
+        let error = parse_patch_message(&make_patch_message(
+            "template.duplicate",
+            json!({
+                "sourceTemplateId": "tpl-1",
+                "newTemplateId": "tpl-1-conflict-1742091000",
+                "name": "Conflict copy",
+            }),
+        ))
+        .expect_err("conflict copy ids should be rejected");
+
+        assert!(
+            format!("{error:?}").contains("local-only team templates cannot be stored in cloud")
+        );
+    }
+
+    #[test]
+    fn snapshot_sanitizer_removes_local_only_templates() {
+        let templates = vec![
+            make_template("tpl-1", "模板1", "1001", 1.0),
+            make_template("__raid_copy__", "临时复制", "1002", 1.5),
+            make_template("tpl-2-conflict-1742091000", "冲突副本", "1003", 2.0),
+        ];
+
+        let sanitized = sanitize_snapshot_templates(templates);
+
+        assert_eq!(sanitized.len(), 1);
+        assert_eq!(sanitized[0].id, "tpl-1");
     }
 
     #[test]
@@ -1092,7 +1221,11 @@ mod tests {
             name: "重命名".to_string(),
         };
 
-        assert!(!should_persist_snapshot_result(&templates, &Vec::new(), &patch));
+        assert!(!should_persist_snapshot_result(
+            &templates,
+            &Vec::new(),
+            &patch
+        ));
     }
 
     #[test]

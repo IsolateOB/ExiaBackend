@@ -1,5 +1,7 @@
 mod jwt;
+mod team_templates;
 pub use jwt::*;
+pub use team_templates::*;
 
 use serde::Serialize;
 use worker::*;

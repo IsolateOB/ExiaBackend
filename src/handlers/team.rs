@@ -28,10 +28,13 @@ pub async fn get_team_template_handler(req: Request, ctx: RouteContext<()>) -> R
     };
 
     let stmt = db.prepare("SELECT template_id, name, created_at, total_damage_coefficient, updated_at FROM team_templates WHERE user_id = ?1 ORDER BY updated_at DESC");
-    let templates = match stmt.bind(&[(claims.uid as i32).into()]) {
+    let templates: Vec<TeamTemplateMetaRow> = match stmt.bind(&[(claims.uid as i32).into()]) {
         Ok(s) => match s.all().await {
             Ok(r) => match r.results::<TeamTemplateMetaRow>() {
-                Ok(list) => list,
+                Ok(list) => list
+                    .into_iter()
+                    .filter(|row| !is_local_only_team_template_id(&row.template_id))
+                    .collect(),
                 Err(e) => return error_response(&format!("database parse error: {}", e), 500),
             },
             Err(e) => return error_response(&format!("database query error: {}", e), 500),
@@ -57,6 +60,9 @@ pub async fn get_team_template_handler(req: Request, ctx: RouteContext<()>) -> R
 
     let mut member_map: HashMap<String, Vec<TeamTemplateMemberRow>> = HashMap::new();
     for row in members.into_iter() {
+        if is_local_only_team_template_id(&row.template_id) {
+            continue;
+        }
         member_map
             .entry(row.template_id.clone())
             .or_default()
@@ -142,77 +148,98 @@ pub async fn save_team_template_handler(
         Err(_) => return error_response("invalid json format", 400),
     };
 
-    let templates: Vec<TeamTemplatePayload> = match body.template_data {
+    let parsed_templates: Vec<TeamTemplatePayload> = match body.template_data {
         serde_json::Value::Array(arr) => arr
             .into_iter()
             .filter_map(|val| serde_json::from_value::<TeamTemplatePayload>(val).ok())
             .collect(),
         _ => Vec::new(),
     };
+    let selection =
+        select_templates_for_cloud_replace(parsed_templates, |template| template.id.as_str());
+    let skipped_template_count = selection.skipped_count;
+    let should_replace_existing = selection.should_replace_existing;
+    let templates = selection.templates;
+    let cloud_templates_empty = templates.is_empty();
 
     let now = Utc::now().timestamp() as f64;
 
-    let del_stmt = db.prepare("DELETE FROM team_template_members WHERE user_id = ?1");
-    if let Ok(s) = del_stmt.bind(&[(claims.uid as i32).into()]) {
-        if s.run().await.is_err() {
-            return error_response("failed to clear old templates", 500);
-        }
-    }
-    let del_stmt = db.prepare("DELETE FROM team_templates WHERE user_id = ?1");
-    if let Ok(s) = del_stmt.bind(&[(claims.uid as i32).into()]) {
-        if s.run().await.is_err() {
-            return error_response("failed to clear old templates", 500);
-        }
-    }
-
-    for tpl in templates.into_iter() {
-        let insert_tpl = db.prepare("INSERT OR REPLACE INTO team_templates (user_id, template_id, name, created_at, total_damage_coefficient, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)");
-        match insert_tpl.bind(&[
-            (claims.uid as i32).into(),
-            tpl.id.clone().into(),
-            tpl.name.clone().into(),
-            (tpl.created_at as f64).into(),
-            tpl.total_damage_coefficient.into(),
-            now.into(),
-        ]) {
-            Ok(s) => {
-                if s.run().await.is_err() {
-                    return error_response("failed to save template", 500);
-                }
+    if should_replace_existing {
+        let del_stmt = db.prepare("DELETE FROM team_template_members WHERE user_id = ?1");
+        if let Ok(s) = del_stmt.bind(&[(claims.uid as i32).into()]) {
+            if s.run().await.is_err() {
+                return error_response("failed to clear old templates", 500);
             }
-            Err(e) => return error_response(&format!("database bind error: {}", e), 500),
         }
 
-        for member in tpl.members.into_iter() {
-            let coeff_json = if member.coefficients.is_null() {
-                String::new()
-            } else {
-                member.coefficients.to_string()
-            };
-            let insert_member = db.prepare("INSERT OR REPLACE INTO team_template_members (user_id, template_id, position, character_id, damage_coefficient, coefficients_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)");
-            match insert_member.bind(&[
+        let del_stmt = db.prepare("DELETE FROM team_templates WHERE user_id = ?1");
+        if let Ok(s) = del_stmt.bind(&[(claims.uid as i32).into()]) {
+            if s.run().await.is_err() {
+                return error_response("failed to clear old templates", 500);
+            }
+        }
+
+        for tpl in templates.into_iter() {
+            let insert_tpl = db.prepare("INSERT OR REPLACE INTO team_templates (user_id, template_id, name, created_at, total_damage_coefficient, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)");
+            match insert_tpl.bind(&[
                 (claims.uid as i32).into(),
                 tpl.id.clone().into(),
-                member.position.into(),
-                member.character_id.unwrap_or_default().into(),
-                member.damage_coefficient.into(),
-                coeff_json.into(),
+                tpl.name.clone().into(),
+                (tpl.created_at as f64).into(),
+                tpl.total_damage_coefficient.into(),
+                now.into(),
             ]) {
                 Ok(s) => {
                     if s.run().await.is_err() {
-                        return error_response("failed to save template member", 500);
+                        return error_response("failed to save template", 500);
                     }
                 }
                 Err(e) => return error_response(&format!("database bind error: {}", e), 500),
             }
+
+            for member in tpl.members.into_iter() {
+                let coeff_json = if member.coefficients.is_null() {
+                    String::new()
+                } else {
+                    member.coefficients.to_string()
+                };
+                let insert_member = db.prepare("INSERT OR REPLACE INTO team_template_members (user_id, template_id, position, character_id, damage_coefficient, coefficients_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)");
+                match insert_member.bind(&[
+                    (claims.uid as i32).into(),
+                    tpl.id.clone().into(),
+                    member.position.into(),
+                    member.character_id.unwrap_or_default().into(),
+                    member.damage_coefficient.into(),
+                    coeff_json.into(),
+                ]) {
+                    Ok(s) => {
+                        if s.run().await.is_err() {
+                            return error_response("failed to save template member", 500);
+                        }
+                    }
+                    Err(e) => return error_response(&format!("database bind error: {}", e), 500),
+                }
+            }
         }
     }
+
+    let message = match (skipped_template_count, should_replace_existing) {
+        (0, _) => "data saved to cloud".to_string(),
+        (skipped_count, true) if cloud_templates_empty => {
+            format!("cloud templates cleared; skipped {skipped_count} local-only template(s)")
+        }
+        (skipped_count, true) => {
+            format!("data saved to cloud; skipped {skipped_count} local-only template(s)")
+        }
+        (_, false) => "local-only templates skipped; cloud data unchanged".to_string(),
+    };
 
     json_response(
         &serde_json::json!({
             "ok": true,
-            "message": "data saved to cloud",
-            "updated_at": now
+            "message": message,
+            "updated_at": now,
+            "skipped_template_count": skipped_template_count
         }),
         200,
     )
