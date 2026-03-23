@@ -1125,8 +1125,8 @@ mod tests {
         let error = parse_patch_message(&make_patch_message(
             "template.create",
             json!({
-                "templateId": "__raid_copy__",
-                "name": "Temporary copy",
+                "templateId": "default-local",
+                "name": "Local default",
             }),
         ))
         .expect_err("local-only template ids should be rejected");
@@ -1137,16 +1137,16 @@ mod tests {
     }
 
     #[test]
-    fn template_duplicate_patch_rejects_conflict_copy_ids() {
+    fn template_duplicate_patch_rejects_local_template_prefix_ids() {
         let error = parse_patch_message(&make_patch_message(
             "template.duplicate",
             json!({
                 "sourceTemplateId": "tpl-1",
-                "newTemplateId": "tpl-1-conflict-1742091000",
-                "name": "Conflict copy",
+                "newTemplateId": "local-template-1742091000",
+                "name": "Local duplicate",
             }),
         ))
-        .expect_err("conflict copy ids should be rejected");
+        .expect_err("local-only template ids should be rejected");
 
         assert!(
             format!("{error:?}").contains("local-only team templates cannot be stored in cloud")
@@ -1156,6 +1156,8 @@ mod tests {
     #[test]
     fn snapshot_sanitizer_removes_local_only_templates() {
         let templates = vec![
+            make_template("default-local", "Local default", "1004", 1.75),
+            make_template("local-template-1742091000", "Local template", "1005", 1.9),
             make_template("tpl-1", "模板1", "1001", 1.0),
             make_template("__raid_copy__", "临时复制", "1002", 1.5),
             make_template("tpl-2-conflict-1742091000", "冲突副本", "1003", 2.0),

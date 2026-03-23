@@ -1,4 +1,6 @@
 pub const TEMPORARY_COPY_TEMPLATE_ID: &str = "__raid_copy__";
+pub const LOCAL_DEFAULT_TEMPLATE_ID: &str = "default-local";
+pub const LOCAL_TEMPLATE_ID_PREFIX: &str = "local-template-";
 pub const LOCAL_ONLY_TEAM_TEMPLATE_ERROR: &str =
     "local-only team templates cannot be stored in cloud";
 
@@ -11,7 +13,10 @@ pub struct CloudTemplateSelection<T> {
 
 pub fn is_local_only_team_template_id(template_id: &str) -> bool {
     let trimmed = template_id.trim();
-    trimmed == TEMPORARY_COPY_TEMPLATE_ID || trimmed.contains("-conflict-")
+    trimmed == TEMPORARY_COPY_TEMPLATE_ID
+        || trimmed == LOCAL_DEFAULT_TEMPLATE_ID
+        || trimmed.starts_with(LOCAL_TEMPLATE_ID_PREFIX)
+        || trimmed.contains("-conflict-")
 }
 
 pub fn validate_cloud_template_id(template_id: &str) -> std::result::Result<(), String> {
@@ -54,7 +59,8 @@ where
 mod tests {
     use super::{
         is_local_only_team_template_id, select_templates_for_cloud_replace,
-        LOCAL_ONLY_TEAM_TEMPLATE_ERROR, TEMPORARY_COPY_TEMPLATE_ID,
+        LOCAL_DEFAULT_TEMPLATE_ID, LOCAL_ONLY_TEAM_TEMPLATE_ERROR,
+        LOCAL_TEMPLATE_ID_PREFIX, TEMPORARY_COPY_TEMPLATE_ID,
     };
 
     #[derive(Debug, PartialEq)]
@@ -65,6 +71,10 @@ mod tests {
     #[test]
     fn recognizes_local_only_team_template_ids() {
         assert!(is_local_only_team_template_id(TEMPORARY_COPY_TEMPLATE_ID));
+        assert!(is_local_only_team_template_id(LOCAL_DEFAULT_TEMPLATE_ID));
+        assert!(is_local_only_team_template_id(&format!(
+            "{LOCAL_TEMPLATE_ID_PREFIX}1742091000"
+        )));
         assert!(is_local_only_team_template_id(
             "raid-main-conflict-1742091000"
         ));
@@ -82,6 +92,12 @@ mod tests {
                     id: TEMPORARY_COPY_TEMPLATE_ID.to_string(),
                 },
                 TestTemplate {
+                    id: LOCAL_DEFAULT_TEMPLATE_ID.to_string(),
+                },
+                TestTemplate {
+                    id: format!("{LOCAL_TEMPLATE_ID_PREFIX}1742091000"),
+                },
+                TestTemplate {
                     id: "raid-main-conflict-1742091000".to_string(),
                 },
             ],
@@ -94,7 +110,7 @@ mod tests {
                 id: "raid-main".to_string(),
             }]
         );
-        assert_eq!(selection.skipped_count, 2);
+        assert_eq!(selection.skipped_count, 4);
         assert!(selection.should_replace_existing);
     }
 
